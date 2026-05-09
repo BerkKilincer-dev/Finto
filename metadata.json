@@ -1,0 +1,8 @@
+{
+  "name": "Finto",
+  "description": "Evrensel Tasarıma sahip, ses ve yapay zeka destekli erişilebilir finans/KOBİ platformu.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": []
+}
