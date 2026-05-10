@@ -4,8 +4,9 @@ import cookieParser from 'cookie-parser';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { BIST_SYMBOLS } from '../frontend/src/data/bistWatchlist.ts';
-import { buildTechnicalPrediction } from './predictionEngine.ts';
+import { buildTechnicalPrediction, type OHLCV } from './predictionEngine.ts';
 import authRouter from './auth.ts';
+import { fetchYahooChart, mapInChunks } from './yahooClient.ts';
 
 type YahooChartMeta = {
   symbol?: string;
@@ -60,12 +61,14 @@ async function startServer() {
   app.get('/api/stocks/quotes', async (_req, res) => {
     try {
       const bistSymbols = BIST_SYMBOLS;
-      const quotes = await Promise.all(
-        bistSymbols.map(async (symbol) => {
+      const quotes = await mapInChunks(bistSymbols, 5, async (symbol) => {
           const chartUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}.IS?interval=1d&range=5d`;
-          const response = await fetch(chartUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0' },
-          });
+          let response: Response;
+          try {
+            response = await fetchYahooChart(chartUrl);
+          } catch {
+            return null;
+          }
           if (!response.ok) {
             return null;
           }
@@ -90,8 +93,7 @@ async function startServer() {
             dailyChangePercent: changePercent,
             source: `Yahoo Finance ${meta.exchangeName ? `(${meta.exchangeName})` : '(BIST)'} gecikmeli veri`,
           };
-        }),
-      );
+      });
 
       const validQuotes = quotes.filter(Boolean);
       if (validQuotes.length === 0) {
@@ -111,12 +113,14 @@ async function startServer() {
       const symbols =
         Array.isArray(body.symbols) && body.symbols.length > 0 ? body.symbols : [...BIST_SYMBOLS];
 
-      const entries = await Promise.all(
-        symbols.map(async (symbol) => {
-          const chartUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}.IS?interval=1d&range=3mo`;
-          const response = await fetch(chartUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0' },
-          });
+      const entries = await mapInChunks(symbols, 4, async (symbol) => {
+          const chartUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}.IS?interval=1d&range=2y`;
+          let response: Response;
+          try {
+            response = await fetchYahooChart(chartUrl);
+          } catch {
+            return null;
+          }
           if (!response.ok) {
             return null;
           }
@@ -124,26 +128,44 @@ async function startServer() {
           const payload = await response.json();
           const chart = payload?.chart?.result?.[0];
           const meta = chart?.meta as YahooChartMeta | undefined;
-          const closesRaw = chart?.indicators?.quote?.[0]?.close ?? [];
-          const closes = closesRaw.filter(
-            (c: unknown): c is number => typeof c === 'number' && Number.isFinite(c),
-          );
+          const quote0 = chart?.indicators?.quote?.[0] as
+            | { close?: unknown[]; high?: unknown[]; low?: unknown[]; volume?: unknown[] }
+            | undefined;
+          const closesRaw = quote0?.close ?? [];
+          const highsRaw = quote0?.high ?? [];
+          const lowsRaw = quote0?.low ?? [];
+          const volumesRaw = quote0?.volume ?? [];
+
+          const paired: OHLCV[] = [];
+          const len = Math.max(closesRaw.length, highsRaw.length, lowsRaw.length, volumesRaw.length);
+          let lastVol: number | null = null;
+          for (let i = 0; i < len; i += 1) {
+            const c = closesRaw[i];
+            const hi = highsRaw[i];
+            const lo = lowsRaw[i];
+            const v = volumesRaw[i];
+            if (typeof c !== 'number' || !Number.isFinite(c)) continue;
+            const h = typeof hi === 'number' && Number.isFinite(hi) ? hi : c;
+            const l = typeof lo === 'number' && Number.isFinite(lo) ? lo : c;
+            if (typeof v === 'number' && Number.isFinite(v) && v >= 0) lastVol = v;
+            if (lastVol === null) continue;
+            paired.push({ c, h, l, v: lastVol });
+          }
 
           const price =
             typeof meta?.regularMarketPrice === 'number'
               ? meta.regularMarketPrice
-              : closes.length > 0
-                ? closes[closes.length - 1]
+              : paired.length > 0
+                ? paired[paired.length - 1].c
                 : NaN;
 
-          if (!Number.isFinite(price) || closes.length < 5) {
+          if (!Number.isFinite(price) || paired.length < 5) {
             return null;
           }
 
-          const prediction = buildTechnicalPrediction(symbol, price, closes);
+          const prediction = buildTechnicalPrediction(symbol, price, paired);
           return [symbol, prediction] as const;
-        }),
-      );
+      });
 
       const predictions: Record<string, ReturnType<typeof buildTechnicalPrediction>> = {};
       for (const entry of entries) {

@@ -9,7 +9,8 @@
     "start": "node backend/server.ts",
     "preview": "vite preview --config frontend/vite.config.ts",
     "clean": "rm -rf frontend/dist",
-    "lint": "tsc --project frontend/tsconfig.json --noEmit"
+    "lint": "tsc --project frontend/tsconfig.json --noEmit",
+    "calibrate-thresholds": "tsx scripts/backtest-thresholds.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

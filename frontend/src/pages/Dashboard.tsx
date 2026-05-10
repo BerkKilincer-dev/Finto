@@ -25,11 +25,17 @@ type DashboardProps = {
   stocks: MarketStock[];
   predictions: Record<string, TechnicalPrediction>;
   predictLoading: boolean;
+  /** Teknik tahminlerin son güncellenme zamanı */
+  predictUpdatedAt: Date | null;
   lastUpdated: Date | null;
+  /** Yahoo / API erişilemediğinde kısa uyarı */
+  marketDataWarning: string | null;
   onBuyStock: (symbol: string, quantity: number) => { ok: boolean; message: string };
   onSellStock: (symbol: string, quantity: number) => { ok: boolean; message: string };
   onWithdrawCash: (amount: number) => { ok: boolean; message: string };
 };
+
+type SortMode = 'score' | 'change' | 'symbol' | 'name';
 
 type ConfirmModal = {
   type: 'buy' | 'sell';
@@ -49,12 +55,15 @@ export default function Dashboard({
   stocks,
   predictions,
   predictLoading,
+  predictUpdatedAt,
   lastUpdated,
+  marketDataWarning,
   onBuyStock,
   onSellStock,
   onWithdrawCash,
 }: DashboardProps) {
   const [selectedSymbol, setSelectedSymbol] = useState(stocks[0]?.symbol ?? '');
+  const [sortBy, setSortBy] = useState<SortMode>('score');
   const [lotInput, setLotInput] = useState('1');
   const [withdrawInput, setWithdrawInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -72,6 +81,10 @@ export default function Dashboard({
 
   useEffect(() => () => { if (feedbackTimer.current) clearTimeout(feedbackTimer.current); }, []);
 
+  useEffect(() => {
+    if (!selectedSymbol && stocks[0]?.symbol) setSelectedSymbol(stocks[0].symbol);
+  }, [stocks, selectedSymbol]);
+
   const holdingsCount = useMemo(() => holdings.reduce((t, h) => t + h.quantity, 0), [holdings]);
 
   const totalPnl = useMemo(() => holdings.reduce((t, h) => {
@@ -85,10 +98,32 @@ export default function Dashboard({
     return stocks.filter((s) => s.symbol.toLowerCase().includes(q) || s.name.toLowerCase().includes(q));
   }, [stocks, searchQuery]);
 
+  const sortedStocks = useMemo(() => {
+    const arr = [...filteredStocks];
+    const scoreOf = (sym: string) => predictions[sym]?.score ?? -Infinity;
+    switch (sortBy) {
+      case 'score':
+        return arr.sort((a, b) => scoreOf(b.symbol) - scoreOf(a.symbol));
+      case 'change':
+        return arr.sort((a, b) => b.dailyChangePercent - a.dailyChangePercent);
+      case 'symbol':
+        return arr.sort((a, b) => a.symbol.localeCompare(b.symbol, 'tr'));
+      case 'name':
+        return arr.sort((a, b) => a.name.localeCompare(b.name, 'tr'));
+      default:
+        return arr;
+    }
+  }, [filteredStocks, sortBy, predictions]);
+
   const lastUpdatedText = useMemo(() => {
     if (!lastUpdated) return null;
     return lastUpdated.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   }, [lastUpdated]);
+
+  const predictUpdatedText = useMemo(() => {
+    if (!predictUpdatedAt) return null;
+    return predictUpdatedAt.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }, [predictUpdatedAt]);
 
   function handleBuySubmit(e: { preventDefault(): void }) {
     e.preventDefault();
@@ -172,6 +207,11 @@ export default function Dashboard({
       <div>
         <p className="text-xs font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-1">Genel Bakış</p>
         <h1 className="text-3xl md:text-4xl font-black text-slate-900 dark:text-white tracking-tight">Portföyüm</h1>
+        {marketDataWarning && (
+          <div className="mt-3 px-4 py-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border-2 border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-100 text-sm font-semibold">
+            {marketDataWarning}
+          </div>
+        )}
       </div>
 
       {/* Üst stat kartları */}
@@ -247,15 +287,16 @@ export default function Dashboard({
 
           {/* Piyasa listesi */}
           <div className="bg-white dark:bg-slate-800 border-2 border-slate-100 dark:border-slate-700 rounded-2xl overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+            <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-700 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-[11px] font-black uppercase tracking-widest text-slate-400">BIST Hisseleri</p>
-              {lastUpdatedText && (
-                <p className="text-[10px] font-bold text-slate-400">⟳ {lastUpdatedText}</p>
-              )}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] font-bold text-slate-400">
+                {lastUpdatedText && <span>Fiyat ⟳ {lastUpdatedText}</span>}
+                {predictUpdatedText && <span>Tahmin ⟳ {predictUpdatedText}</span>}
+              </div>
             </div>
 
-            <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-700">
-              <div className="relative">
+            <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-700 flex flex-col sm:flex-row gap-3">
+              <div className="relative flex-1">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   type="text"
@@ -265,13 +306,26 @@ export default function Dashboard({
                   className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-700/50 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-blue-400 transition-colors"
                 />
               </div>
+              <label className="flex items-center gap-2 text-xs font-bold text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                <span>Sırala</span>
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as SortMode)}
+                  className="rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 px-2 py-2 font-semibold text-slate-900 dark:text-white text-xs"
+                >
+                  <option value="score">Teknik skor (yüksek)</option>
+                  <option value="change">Günlük % (yüksek)</option>
+                  <option value="symbol">Sembol (A-Z)</option>
+                  <option value="name">Şirket adı</option>
+                </select>
+              </label>
             </div>
 
             <div className="divide-y divide-slate-50 dark:divide-slate-700/50 max-h-[500px] overflow-y-auto">
-              {filteredStocks.length === 0 && (
+              {sortedStocks.length === 0 && (
                 <p className="text-center text-slate-400 text-sm font-semibold py-8">Hisse bulunamadı.</p>
               )}
-              {filteredStocks.map((stock) => {
+              {sortedStocks.map((stock) => {
                 const pred = predictions[stock.symbol];
                 const up = stock.dailyChangePercent >= 0;
                 const TrendIcon = pred?.trend === 'Yukselis' ? TrendingUp : pred?.trend === 'Dusuk seyir' ? TrendingDown : Minus;

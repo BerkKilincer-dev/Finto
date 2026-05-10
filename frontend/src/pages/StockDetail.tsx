@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, RefreshCw, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import type { TechnicalPrediction } from '../../../backend/predictionEngine.ts';
@@ -17,13 +17,14 @@ type StockDetailProps = {
   stocks: MarketStock[];
   predictions: Record<string, TechnicalPrediction>;
   predictLoading: boolean;
+  predictUpdatedAt: Date | null;
   onRefreshPrediction: (symbol: string) => Promise<void>;
 };
 
 const fmt = (n: number) =>
   n.toLocaleString('tr-TR', { style: 'currency', currency: 'TRY', maximumFractionDigits: 2 });
 
-export default function StockDetail({ stocks, predictions, predictLoading, onRefreshPrediction }: StockDetailProps) {
+export default function StockDetail({ stocks, predictions, predictLoading, predictUpdatedAt, onRefreshPrediction }: StockDetailProps) {
   const { symbol } = useParams();
   const symbolUpper = symbol?.toUpperCase() ?? '';
   const stock = stocks.find((s) => s.symbol === symbolUpper);
@@ -41,6 +42,11 @@ export default function StockDetail({ stocks, predictions, predictLoading, onRef
   const TrendIcon = prediction?.trend === 'Yukselis' ? TrendingUp : prediction?.trend === 'Dusuk seyir' ? TrendingDown : Minus;
   const trendColor = prediction?.trend === 'Yukselis' ? 'text-green-600' : prediction?.trend === 'Dusuk seyir' ? 'text-red-500' : 'text-slate-500';
   const labelCls = 'text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-1';
+
+  const predictTimeText = useMemo(() => {
+    if (!predictUpdatedAt) return null;
+    return predictUpdatedAt.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }, [predictUpdatedAt]);
 
   return (
     <div className="p-4 md:p-6 flex flex-col gap-5" id="main-content">
@@ -105,7 +111,12 @@ export default function StockDetail({ stocks, predictions, predictLoading, onRef
         <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
           <div>
             <p className="font-black text-slate-900 dark:text-white">Teknik Analiz</p>
-            <p className="text-xs text-slate-400 mt-0.5">SMA · RSI · Momentum · 3 aylık veri</p>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Trend/osilator grupları · ATR · Dinamik pencere · Yahoo günlük OHLCV
+              {predictTimeText && (
+                <span className="block mt-1 font-semibold">Liste tahmini son güncelleme: {predictTimeText}</span>
+              )}
+            </p>
           </div>
           <button
             type="button"
@@ -129,9 +140,21 @@ export default function StockDetail({ stocks, predictions, predictLoading, onRef
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {[
                 { label: 'Trend', value: prediction.trend, color: trendColor },
-                { label: 'Teknik Skor', value: `${prediction.score > 0 ? '+' : ''}${prediction.score}`, sub: '-100 / +100' },
-                { label: 'Hedef Fiyat', value: fmt(prediction.targetPrice) },
-                { label: 'Güven', value: `%${prediction.confidence}` },
+                {
+                  label: 'Teknik Skor',
+                  value: `${prediction.score > 0 ? '+' : ''}${prediction.score}`,
+                  sub: `Eşik ±${prediction.trendThresholdUsed} (kalibre edilebilir)`,
+                },
+                {
+                  label: 'Hedef (orta)',
+                  value: fmt(prediction.targetPrice),
+                  sub: `${fmt(prediction.targetPriceLow)} — ${fmt(prediction.targetPriceHigh)} (±ATR)`,
+                },
+                {
+                  label: 'Gösterge tutarlılığı',
+                  value: `%${prediction.signalConsistencyPercent}`,
+                  sub: `İç model özeti %${prediction.modelConsistencyScore} — gelecekteki isabet oranı değildir`,
+                },
               ].map(({ label, value, sub, color }) => (
                 <div key={label} className="bg-slate-50 dark:bg-slate-700/50 rounded-xl p-4">
                   <p className={labelCls}>{label}</p>
@@ -159,6 +182,36 @@ export default function StockDetail({ stocks, predictions, predictLoading, onRef
                     </span>
                   </div>
                   <div className="flex justify-between">
+                    <span className="font-semibold text-slate-500 dark:text-slate-400">MACD histogram</span>
+                    <span className={`font-black ${(prediction.macdHistogram ?? 0) >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                      {prediction.macdHistogram !== null ? prediction.macdHistogram.toFixed(4) : '—'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="font-semibold text-slate-500 dark:text-slate-400">Bollinger %B</span>
+                    <span className="font-black text-slate-900 dark:text-white">
+                      {prediction.bollingerPercentB !== null ? prediction.bollingerPercentB.toFixed(1) : '—'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="font-semibold text-slate-500 dark:text-slate-400">Hacim (5g / onceki 15g)</span>
+                    <span className="font-black text-slate-900 dark:text-white">
+                      {prediction.volumeVsAvgRatio !== null ? `x${prediction.volumeVsAvgRatio.toFixed(2)}` : '—'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="font-semibold text-slate-500 dark:text-slate-400">ATR (14) / Fiyat</span>
+                    <span className="font-black text-slate-900 dark:text-white">
+                      {prediction.atr14 !== null && prediction.atr14PercentOfPrice !== null
+                        ? `${prediction.atr14.toFixed(2)} TL · %${prediction.atr14PercentOfPrice}`
+                        : '—'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="font-semibold text-slate-500 dark:text-slate-400">Pencere</span>
+                    <span className="font-black text-slate-900 dark:text-white">{prediction.lookbackTradingDays} gün</span>
+                  </div>
+                  <div className="flex justify-between">
                     <span className="font-semibold text-slate-500 dark:text-slate-400">Ufuk</span>
                     <span className="font-black text-slate-900 dark:text-white">{prediction.horizon}</span>
                   </div>
@@ -184,8 +237,8 @@ export default function StockDetail({ stocks, predictions, predictLoading, onRef
               </ul>
             </div>
 
-            <p className="text-[11px] text-slate-400 font-semibold">
-              ⚠ Bu sonuçlar otomatik teknik kurallara dayanır; yatırım tavsiyesi değildir.
+            <p className="text-[11px] text-slate-400 font-semibold leading-relaxed">
+              ⚠ Otomatik teknik kurallara dayanır; yatırım tavsiyesi değildir. <strong>Gösterge tutarlılığı</strong>, göstergelerin birbirleriyle ve skor işaretiyle ne kadar uyumlu olduğunu ölçer — gelecekteki fiyat veya yön isabetini göstermez. <strong>Hedef aralığı</strong>, orta nokta ± yaklaşık bir ATR ile belirsizliği ifade eder; kesin bir sonuç bandı değildir.
             </p>
           </div>
         ) : (

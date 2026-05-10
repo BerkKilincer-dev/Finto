@@ -32,7 +32,9 @@ export default function App() {
   const [stocks, setStocks] = useState<MarketStock[]>(INITIAL_BIST_STOCKS);
   const [predictions, setPredictions] = useState<Record<string, TechnicalPrediction>>({});
   const [predictLoading, setPredictLoading] = useState(true);
+  const [predictUpdatedAt, setPredictUpdatedAt] = useState<Date | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [marketDataWarning, setMarketDataWarning] = useState<string | null>(null);
   const [darkMode, setDarkMode] = useState<boolean>(() => {
     return localStorage.getItem('finto_dark') === 'true';
   });
@@ -132,6 +134,8 @@ export default function App() {
       const payload = await response.json();
       const map = payload?.predictions as Record<string, TechnicalPrediction> | undefined;
       if (map && typeof map === 'object') setPredictions((prev) => ({ ...prev, ...map }));
+      const pu = payload?.updatedAt;
+      if (typeof pu === 'string') setPredictUpdatedAt(new Date(pu));
     } catch {
       // Tahmin servisi kapalıysa önceki cache kalır
     } finally {
@@ -151,10 +155,17 @@ export default function App() {
     async function loadLiveQuotes() {
       try {
         const response = await fetch('/api/stocks/quotes');
-        if (!response.ok) return;
+        if (!response.ok) {
+          if (!isCancelled) setMarketDataWarning('Canlı fiyatlar şu an güncellenemedi (ağ veya veri kaynağı).');
+          return;
+        }
         const payload = await response.json();
         const liveQuotes: Array<Partial<MarketStock> & { symbol: string }> = payload?.quotes ?? [];
-        if (isCancelled || !Array.isArray(liveQuotes) || liveQuotes.length === 0) return;
+        if (isCancelled || !Array.isArray(liveQuotes) || liveQuotes.length === 0) {
+          if (!isCancelled) setMarketDataWarning('Canlı fiyatlar alınamadı.');
+          return;
+        }
+        setMarketDataWarning(null);
         setStocks((prev) =>
           prev.map((stock) => {
             const live = liveQuotes.find((q) => q.symbol === stock.symbol);
@@ -244,7 +255,9 @@ export default function App() {
                   stocks={stocks}
                   predictions={predictions}
                   predictLoading={predictLoading}
+                  predictUpdatedAt={predictUpdatedAt}
                   lastUpdated={lastUpdated}
+                  marketDataWarning={marketDataWarning}
                   onBuyStock={buyStock}
                   onSellStock={sellStock}
                   onWithdrawCash={withdrawCash}
@@ -258,6 +271,7 @@ export default function App() {
                   stocks={stocks}
                   predictions={predictions}
                   predictLoading={predictLoading}
+                  predictUpdatedAt={predictUpdatedAt}
                   onRefreshPrediction={(symbol) => loadPredictions([symbol], { quiet: true })}
                 />
               }
