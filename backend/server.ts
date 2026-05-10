@@ -1,10 +1,11 @@
 import 'dotenv/config';
 import express from 'express';
+import cookieParser from 'cookie-parser';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI } from '@google/genai';
 import path from 'path';
-import { BIST_SYMBOLS } from './src/data/bistWatchlist.ts';
+import { BIST_SYMBOLS } from '../frontend/src/data/bistWatchlist.ts';
 import { buildTechnicalPrediction } from './predictionEngine.ts';
+import authRouter from './auth.ts';
 
 type YahooChartMeta = {
   symbol?: string;
@@ -50,9 +51,11 @@ function computeDailyChangePercent(chart: Record<string, unknown> | undefined, m
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3001;
 
   app.use(express.json());
+  app.use(cookieParser());
+  app.use('/api/auth', authRouter);
 
   app.get('/api/stocks/quotes', async (_req, res) => {
     try {
@@ -161,75 +164,20 @@ async function startServer() {
     }
   });
 
-  // LLM / Chat Endpoint'i
-  app.post('/api/chat', async (req, res) => {
-    try {
-      const { user_query, current_path, page_context } = req.body;
-
-      if (!user_query) {
-        return res.status(400).json({ error: 'user_query (kullanıcı sorusu) gerekli.' });
-      }
-
-      const apiKey = process.env.GEMINI_API_KEY;
-      console.log("SERVER: API Key starts with:", apiKey ? apiKey.substring(0, 5) : 'undefined');
-      if (!apiKey || apiKey === 'MY_GEMINI_API_KEY' || apiKey.trim() === '') {
-         return res.status(401).json({ error: 'API Anahtarı bulunamadı. Lütfen AI Studio ayarlarından GEMINI_API_KEY tanımlayın.' });
-      }
-
-      const aiClient = new GoogleGenAI({ apiKey });
-
-
-      // Finto Sesli Asistan Sistem Promptu
-      const systemPrompt = `
-Sen "Finto" adında, görme engelli kullanıcılara ve standart kullanıcılara hizmet veren bir yapay zeka finans asistanısın.
-
-ŞU ANKİ BAĞLAM:
-- Kullanıcının Bulunduğu Sayfa Yolu (Path): ${current_path || 'Bilinmiyor'}
-- Sayfadaki Aktif Veri (Context): ${page_context ? JSON.stringify(page_context) : 'Veri Yok'}
-
-GÖREVIN: Kullanıcının sorusuna yukarıdaki bağlamı (context) merkeze alarak yanıt ver. Eğer kullanıcı sayfa hakkında bir şey soruyorsa, verilen sayfadaki aktif verileri analiz et.
-
-KATI KURALLAR (Sesli Asistan Formatı):
-1. ASLA markdown formatı kullanma (*, **, # vb.).
-2. ASLA tablo, liste formülü veya kod bloğu oluşturma.
-3. Sayıları veya yüzdeleri okunuşlarıyla veya seslendirmeye en yatkın haliyle yaz (örn: "%5" yerine "yüzde beş", "100.000" yerine "yüz bin").
-4. Tüm metin sanki bir radyo spikeri okuyormuş gibi dümdüz, akıcı ve tek parça bir paragraf olmalıdır.
-5. Yanıtı çok net ve doğrudan ver, uzatma.
-`;
-
-      const response = await aiClient.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: user_query,
-        config: {
-          systemInstruction: systemPrompt,
-          temperature: 0.7,
-        }
-      });
-
-      res.json({ response: response.text });
-    } catch (error: any) {
-      console.error('LLM Hatası:', error);
-      
-      if (error.message?.includes('API key not valid')) {
-        return res.status(401).json({ error: 'Geçersiz API Anahtarı. Lütfen AI Studio ayarlarından geçerli bir GEMINI_API_KEY tanımlayın.' });
-      }
-
-      res.status(500).json({ error: 'LLM yanıt verirken bir hata oluştu.' });
-    }
-  });
-
   // Vite entegrasyonu (Dev mode için middleware, prod mode için statik dosya sunumu)
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
+      configFile: path.resolve(process.cwd(), 'frontend/vite.config.ts'),
+      root: path.resolve(process.cwd(), 'frontend'),
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
     // Üretim ortamı için (Dağıtım)
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath = path.join(process.cwd(), 'frontend', 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
+    app.get('*', (_req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

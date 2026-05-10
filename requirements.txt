@@ -1,0 +1,9 @@
+# Finto — Python Bağımlılıkları
+# Kurulum: pip install -r requirements.txt
+
+httpx>=0.28.0
+websockets>=13.0
+python-dotenv>=1.0.0
+google-genai>=1.29.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0

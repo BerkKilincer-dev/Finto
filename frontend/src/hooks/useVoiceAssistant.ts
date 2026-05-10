@@ -1,57 +1,54 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 
-// Tarayıcı uyumluluğu için prefixler
 const SpeechRecognitionInit = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+export type SpeakSettings = {
+  rate?: number;
+  pitch?: number;
+  autoSpeak?: boolean;
+};
 
 export function useVoiceAssistant() {
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [transcript, setTranscript] = useState('');
-  
   const recognitionRef = useRef<any>(null);
 
   useEffect(() => {
     if (SpeechRecognitionInit) {
       recognitionRef.current = new SpeechRecognitionInit();
-      // Türkçe dil desteği
       recognitionRef.current.lang = 'tr-TR';
       recognitionRef.current.continuous = false;
       recognitionRef.current.interimResults = false;
 
       recognitionRef.current.onresult = (event: any) => {
-        const currentTranscript = event.results[0][0].transcript;
-        setTranscript(currentTranscript);
+        setTranscript(event.results[0][0].transcript);
       };
 
-      recognitionRef.current.onerror = (event: any) => {
-        console.error('Ses tanıma hatası:', event.error);
+      recognitionRef.current.onerror = () => {
         setIsListening(false);
       };
 
       recognitionRef.current.onend = () => {
         setIsListening(false);
       };
-    } else {
-      console.warn('Tarayıcınız Web Speech API tanıma özelliğini desteklemiyor.');
     }
 
     return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
+      recognitionRef.current?.stop();
       window.speechSynthesis.cancel();
     };
   }, []);
 
   const startListening = useCallback(() => {
-    setTranscript(''); // Önceki metni temizle
-    window.speechSynthesis.cancel(); // Eğer konuşuyorsa sus
+    setTranscript('');
+    window.speechSynthesis.cancel();
     setIsSpeaking(false);
     try {
       recognitionRef.current?.start();
       setIsListening(true);
-    } catch (e) {
-      console.error('Dinleme başlatılamadı', e);
+    } catch {
+      // zaten dinliyorsa sessizce geç
     }
   }, []);
 
@@ -60,38 +57,21 @@ export function useVoiceAssistant() {
     setIsListening(false);
   }, []);
 
-  const speak = useCallback((text: string) => {
-    if (!window.speechSynthesis) {
-      console.warn('Tarayıcınız Web Speech API sentezini desteklemiyor.');
-      return;
-    }
-
-    // Varsa mevcut konuşmayı iptal et
+  const speak = useCallback((text: string, settings?: SpeakSettings) => {
+    if (!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
 
     const utterance = new SpeechSynthesisUtterance(text);
-    // Türkçe veya en uygun dili seçme denemesi
     utterance.lang = 'tr-TR';
-    utterance.rate = 1.0; 
-    utterance.pitch = 1.0;
+    utterance.rate = settings?.rate ?? 1.0;
+    utterance.pitch = settings?.pitch ?? 1.0;
 
     utterance.onstart = () => setIsSpeaking(true);
     utterance.onend = () => setIsSpeaking(false);
-    utterance.onerror = (event) => {
-      console.error('Konuşma sentezi hatası:', event);
-      setIsSpeaking(false);
-    };
+    utterance.onerror = () => setIsSpeaking(false);
 
     window.speechSynthesis.speak(utterance);
   }, []);
 
-  return {
-    isListening,
-    isSpeaking,
-    transcript,
-    startListening,
-    stopListening,
-    speak,
-    setTranscript
-  };
+  return { isListening, isSpeaking, transcript, startListening, stopListening, speak, setTranscript };
 }

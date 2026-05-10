@@ -1,0 +1,2 @@
+# Kök dizindeki requirements.txt dosyasını kullan:
+# pip install -r requirements.txt
