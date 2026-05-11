@@ -1,14 +1,122 @@
 import { useAuth } from '../contexts/AuthContext.tsx';
-import { useNavigate } from 'react-router-dom';
-import { LogOut } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { ArrowRight, Laptop, Lock, LogOut, Plus, ShieldCheck, Wallet } from 'lucide-react';
+import { useMemo, useRef, useState } from 'react';
 
-export default function Profile() {
+type Transaction = {
+  id: string;
+  type: 'buy' | 'sell' | 'deposit' | 'withdraw';
+  amount: number;
+  createdAt: string;
+  symbol?: string;
+  quantity?: number;
+};
+
+type ProfileProps = {
+  cashBalance: number;
+  holdingsValue: number;
+  totalBalance: number;
+  registeredCount: number;
+  holdingsCount: number;
+  transactions: Transaction[];
+  onDepositCash: (amount: number) => { ok: boolean; message: string };
+  onWithdrawCash: (amount: number) => { ok: boolean; message: string };
+};
+
+const fmt = (n: number) =>
+  n.toLocaleString('tr-TR', { style: 'currency', currency: 'TRY', maximumFractionDigits: 2 });
+
+const txTypeText: Record<Transaction['type'], string> = {
+  buy: 'Hisse Alımı',
+  sell: 'Hisse Satışı',
+  deposit: 'Para Ekleme',
+  withdraw: 'Para Çekme',
+};
+
+export default function Profile({
+  cashBalance,
+  holdingsValue,
+  totalBalance,
+  registeredCount,
+  holdingsCount,
+  transactions,
+  onDepositCash,
+  onWithdrawCash,
+}: ProfileProps) {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
+  const [depositInput, setDepositInput] = useState('');
+  const [withdrawInput, setWithdrawInput] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newPasswordAgain, setNewPasswordAgain] = useState('');
+  const [showSecurityDetails, setShowSecurityDetails] = useState(false);
+  const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   async function handleSignOut() {
     await signOut();
     navigate('/');
+  }
+
+  function showFeedback(type: 'success' | 'error', text: string) {
+    if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+    setFeedback({ type, text });
+    feedbackTimer.current = setTimeout(() => setFeedback(null), 3200);
+  }
+
+  function handleDepositSubmit(e: { preventDefault(): void }) {
+    e.preventDefault();
+    const amount = Number(depositInput);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      showFeedback('error', 'Geçerli bir tutar girin.');
+      return;
+    }
+    const result = onDepositCash(amount);
+    showFeedback(result.ok ? 'success' : 'error', result.message);
+    if (result.ok) setDepositInput('');
+  }
+
+  function handleWithdrawSubmit(e: { preventDefault(): void }) {
+    e.preventDefault();
+    const amount = Number(withdrawInput);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      showFeedback('error', 'Geçerli bir tutar girin.');
+      return;
+    }
+    const result = onWithdrawCash(amount);
+    showFeedback(result.ok ? 'success' : 'error', result.message);
+    if (result.ok) setWithdrawInput('');
+  }
+
+  const recentTransactions = useMemo(() => transactions.slice(0, 8), [transactions]);
+  const currentSession = useMemo(() => {
+    const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+    if (/Windows/i.test(userAgent)) return 'Windows';
+    if (/Macintosh|Mac OS/i.test(userAgent)) return 'macOS';
+    if (/Android/i.test(userAgent)) return 'Android';
+    if (/iPhone|iPad|iOS/i.test(userAgent)) return 'iOS';
+    return 'Web';
+  }, []);
+
+  function handleChangePasswordSubmit(e: { preventDefault(): void }) {
+    e.preventDefault();
+    if (!currentPassword || !newPassword || !newPasswordAgain) {
+      showFeedback('error', 'Tum sifre alanlarini doldurun.');
+      return;
+    }
+    if (newPassword.length < 8) {
+      showFeedback('error', 'Yeni sifre en az 8 karakter olmali.');
+      return;
+    }
+    if (newPassword !== newPasswordAgain) {
+      showFeedback('error', 'Yeni sifre tekrar alani eslesmiyor.');
+      return;
+    }
+    showFeedback('success', 'Sifre degistirme API baglantisi bir sonraki adimda aktif edilecek.');
+    setCurrentPassword('');
+    setNewPassword('');
+    setNewPasswordAgain('');
   }
 
   if (!user) {
@@ -24,7 +132,7 @@ export default function Profile() {
     : user.email.charAt(0).toUpperCase();
 
   return (
-    <div className="p-4 md:p-6 max-w-md mx-auto flex flex-col gap-5" id="main-content">
+    <div className="p-4 md:p-6 max-w-2xl mx-auto flex flex-col gap-5" id="main-content">
       <div>
         <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-1">Hesap</p>
         <h1 className="text-3xl font-black text-slate-900 dark:text-white tracking-tight">Profilim</h1>
@@ -39,6 +147,202 @@ export default function Profile() {
           <p className="text-sm text-slate-500 dark:text-slate-400 truncate">{user.email}</p>
         </div>
       </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="bg-blue-900 rounded-2xl p-4 col-span-2">
+          <p className="text-[10px] uppercase tracking-widest font-black text-blue-200">Toplam Varlık</p>
+          <p className="text-2xl font-black text-white mt-1">{fmt(totalBalance)}</p>
+        </div>
+        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-4">
+          <p className="text-[10px] uppercase tracking-widest font-black text-slate-400">Nakit</p>
+          <p className="text-lg font-black text-blue-700 dark:text-blue-300 mt-1">{fmt(cashBalance)}</p>
+        </div>
+        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-4">
+          <p className="text-[10px] uppercase tracking-widest font-black text-slate-400">Hisse</p>
+          <p className="text-lg font-black text-slate-900 dark:text-white mt-1">{fmt(holdingsValue)}</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-4">
+          <p className="text-[10px] uppercase tracking-widest font-black text-slate-400">Kayitli Hisse</p>
+          <p className="text-xl font-black text-slate-900 dark:text-white mt-1">{registeredCount}</p>
+        </div>
+        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-4">
+          <p className="text-[10px] uppercase tracking-widest font-black text-slate-400">Toplam Lot</p>
+          <p className="text-xl font-black text-slate-900 dark:text-white mt-1">{holdingsCount}</p>
+        </div>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-3">
+        <form
+          onSubmit={handleDepositSubmit}
+          className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-4 space-y-2"
+        >
+          <p className="text-[10px] uppercase tracking-widest font-black text-slate-400">Ana Bakiyeye Para Ekle</p>
+          <input
+            type="number"
+            min="1"
+            step="0.01"
+            value={depositInput}
+            onChange={(e) => setDepositInput(e.target.value)}
+            placeholder="Tutar (TL)"
+            className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm font-semibold"
+          />
+          <button className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-sm transition-colors">
+            Para Ekle
+          </button>
+        </form>
+
+        <form
+          onSubmit={handleWithdrawSubmit}
+          className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-4 space-y-2"
+        >
+          <p className="text-[10px] uppercase tracking-widest font-black text-slate-400">Ana Bakiyeden Para Cek</p>
+          <input
+            type="number"
+            min="1"
+            step="0.01"
+            value={withdrawInput}
+            onChange={(e) => setWithdrawInput(e.target.value)}
+            placeholder="Tutar (TL)"
+            className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm font-semibold"
+          />
+          <button className="w-full py-2.5 rounded-xl bg-slate-800 dark:bg-slate-700 hover:bg-slate-700 dark:hover:bg-slate-600 text-white font-black text-sm transition-colors">
+            Para Cek
+          </button>
+        </form>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <Link
+          to="/portfolio"
+          className="flex items-center justify-center gap-2 flex-1 py-3 bg-blue-700 hover:bg-blue-800 text-white rounded-2xl font-black text-sm transition-colors"
+        >
+          <Wallet size={16} />
+          Portfoyume Git
+          <ArrowRight size={14} />
+        </Link>
+        <button
+          onClick={() => setDepositInput((prev) => prev || '1000')}
+          className="px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-black text-sm transition-colors"
+          type="button"
+        >
+          <span className="inline-flex items-center gap-2">
+            <Plus size={14} />
+            Hızlı Ekle
+          </span>
+        </button>
+      </div>
+
+      <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+          <p className="text-[10px] uppercase tracking-widest font-black text-slate-400">Guvenlik</p>
+          <span className="inline-flex items-center gap-1 text-xs font-black text-emerald-600 dark:text-emerald-400">
+            <ShieldCheck size={13} />
+            Hesap Korumasi
+          </span>
+        </div>
+
+        <div className="p-4 space-y-3">
+          <div className="grid md:grid-cols-2 gap-2.5">
+            <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-3">
+              <p className="text-[10px] uppercase tracking-widest font-black text-slate-400 mb-1">Son Giris</p>
+              <p className="text-sm font-black text-slate-900 dark:text-white">{new Date().toLocaleString('tr-TR')}</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Bu oturumda aktif.</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-3">
+              <p className="text-[10px] uppercase tracking-widest font-black text-slate-400 mb-1 flex items-center gap-1">
+                <Laptop size={12} />
+                Aktif Cihaz
+              </p>
+              <p className="text-sm font-black text-slate-900 dark:text-white">{currentSession}</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">IP ve cihaz listesi API ile genisletilecek.</p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowSecurityDetails((prev) => !prev)}
+            className="w-full md:w-auto px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-black text-sm transition-colors"
+          >
+            {showSecurityDetails ? 'Guvenlik Detaylarini Gizle' : 'Guvenlik Detaylarini Ac'}
+          </button>
+
+          {showSecurityDetails && (
+            <form onSubmit={handleChangePasswordSubmit} className="space-y-2.5 pt-1">
+              <p className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
+                <Lock size={15} />
+                Sifre Guncelle
+              </p>
+              <input
+                type="password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                placeholder="Mevcut sifre"
+                className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm font-semibold"
+              />
+              <div className="grid md:grid-cols-2 gap-2.5">
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="Yeni sifre"
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm font-semibold"
+                />
+                <input
+                  type="password"
+                  value={newPasswordAgain}
+                  onChange={(e) => setNewPasswordAgain(e.target.value)}
+                  placeholder="Yeni sifre (tekrar)"
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm font-semibold"
+                />
+              </div>
+              <button className="w-full md:w-auto px-4 py-2.5 rounded-xl bg-slate-900 dark:bg-slate-700 hover:bg-slate-800 dark:hover:bg-slate-600 text-white font-black text-sm transition-colors">
+                Sifreyi Guncelle
+              </button>
+            </form>
+          )}
+        </div>
+      </div>
+
+      <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-700">
+          <p className="text-[10px] uppercase tracking-widest font-black text-slate-400">Son Islemler</p>
+        </div>
+        <div className="divide-y divide-slate-100 dark:divide-slate-700/60">
+          {recentTransactions.length === 0 && (
+            <p className="px-4 py-4 text-sm font-semibold text-slate-400">Henuz bir islem kaydi yok.</p>
+          )}
+          {recentTransactions.map((tx) => {
+            const isPositive = tx.type === 'sell' || tx.type === 'deposit';
+            return (
+              <div key={tx.id} className="px-4 py-3 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-black text-slate-900 dark:text-white">{txTypeText[tx.type]}</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {tx.symbol ? `${tx.symbol} ${tx.quantity ?? 0} lot · ` : ''}
+                    {new Date(tx.createdAt).toLocaleString('tr-TR')}
+                  </p>
+                </div>
+                <p className={`text-sm font-black ${isPositive ? 'text-green-600' : 'text-red-500'}`}>
+                  {isPositive ? '+' : '-'}{fmt(tx.amount)}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {feedback && (
+        <div className={`px-4 py-3 rounded-xl text-sm font-bold border ${
+          feedback.type === 'success'
+            ? 'text-green-700 bg-green-50 border-green-200 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800'
+            : 'text-red-600 bg-red-50 border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800'
+        }`}>
+          {feedback.text}
+        </div>
+      )}
 
       <button
         onClick={handleSignOut}

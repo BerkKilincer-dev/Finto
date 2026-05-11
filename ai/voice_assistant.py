@@ -97,7 +97,17 @@ async def handle(ws: ServerConnection):
                 await ws.send(json.dumps({"type": "done"}, ensure_ascii=False))
 
             except Exception as e:
-                await ws.send(json.dumps({"type": "error", "message": str(e)[:200]}, ensure_ascii=False))
+                err = str(e)
+                if "429" in err or "RESOURCE_EXHAUSTED" in err:
+                    user_msg = (
+                        "Gemini API kota limitine ulasildi. Biraz bekleyip tekrar deneyin "
+                        "veya AI Studio'dan kota/faturalandirma ayarlarini kontrol edin."
+                    )
+                elif "403" in err or "PERMISSION_DENIED" in err:
+                    user_msg = "Gemini API erisim izni reddedildi. API anahtarini ve proje izinlerini kontrol edin."
+                else:
+                    user_msg = err[:200]
+                await ws.send(json.dumps({"type": "error", "message": user_msg}, ensure_ascii=False))
 
     except Exception as e:
         if "1000" not in str(e) and "1001" not in str(e):

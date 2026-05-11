@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 
 const SpeechRecognitionInit = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+const FIXED_VOICE_NAME = 'Microsoft Ahmet - Turkish (Turkey)';
 
 export type SpeakSettings = {
   rate?: number;
@@ -13,6 +14,18 @@ export function useVoiceAssistant() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [transcript, setTranscript] = useState('');
   const recognitionRef = useRef<any>(null);
+  const fixedVoiceRef = useRef<SpeechSynthesisVoice | null>(null);
+
+  const pickFixedVoice = useCallback(() => {
+    const voices = window.speechSynthesis?.getVoices?.() ?? [];
+    if (!voices.length) return null;
+
+    const exact = voices.find((v) => v.name === FIXED_VOICE_NAME);
+    if (exact) return exact;
+
+    // Tek sese sabit istendi; cihazda bu ses yoksa Türkçe ilk sese düş.
+    return voices.find((v) => v.lang?.toLowerCase().startsWith('tr')) ?? null;
+  }, []);
 
   useEffect(() => {
     if (SpeechRecognitionInit) {
@@ -34,11 +47,18 @@ export function useVoiceAssistant() {
       };
     }
 
+    const syncVoices = () => {
+      fixedVoiceRef.current = pickFixedVoice();
+    };
+    syncVoices();
+    window.speechSynthesis?.addEventListener?.('voiceschanged', syncVoices);
+
     return () => {
       recognitionRef.current?.stop();
       window.speechSynthesis.cancel();
+      window.speechSynthesis?.removeEventListener?.('voiceschanged', syncVoices);
     };
-  }, []);
+  }, [pickFixedVoice]);
 
   const startListening = useCallback(() => {
     setTranscript('');
@@ -63,13 +83,14 @@ export function useVoiceAssistant() {
 
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'tr-TR';
-    utterance.rate = settings?.rate ?? 1.0;
-    utterance.pitch = settings?.pitch ?? 1.0;
-
+    utterance.rate = settings?.rate ?? 0.95;
+    utterance.pitch = settings?.pitch ?? 0.85;
+    if (fixedVoiceRef.current) {
+      utterance.voice = fixedVoiceRef.current;
+    }
     utterance.onstart = () => setIsSpeaking(true);
     utterance.onend = () => setIsSpeaking(false);
     utterance.onerror = () => setIsSpeaking(false);
-
     window.speechSynthesis.speak(utterance);
   }, []);
 

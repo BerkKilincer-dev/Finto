@@ -1,3 +1,81 @@
 @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --brand-blue: #1d4ed8;
+  --brand-blue-dark: #1e3a8a;
+  --surface-border: #dbe4f0;
+}
+
+body {
+  background:
+    radial-gradient(circle at 10% 0%, rgba(30, 64, 175, 0.05), transparent 35%),
+    radial-gradient(circle at 90% 15%, rgba(37, 99, 235, 0.04), transparent 30%),
+    #f8fafc;
+}
+
+.dark body {
+  background:
+    radial-gradient(circle at 12% 0%, rgba(30, 64, 175, 0.22), transparent 35%),
+    radial-gradient(circle at 88% 18%, rgba(59, 130, 246, 0.15), transparent 30%),
+    #020617;
+}
+
+.ai-grid-bg {
+  background-image: none;
+}
+
+.dark .ai-grid-bg {
+  background-image: none;
+}
+
+.ai-glass {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.dark .ai-glass {
+  background: rgba(15, 23, 42, 0.9);
+}
+
+.ai-neon-border {
+  border: 1px solid var(--surface-border);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 12px 24px rgba(15, 23, 42, 0.05);
+}
+
+.dark .ai-neon-border {
+  border: 1px solid rgba(30, 41, 59, 0.9);
+  box-shadow:
+    0 1px 2px rgba(2, 6, 23, 0.55),
+    0 10px 20px rgba(2, 6, 23, 0.35);
+}
+
+@keyframes ticker-scroll {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.ticker-mask {
+  overflow: hidden;
+}
+
+.ticker-track {
+  display: flex;
+  width: max-content;
+  animation: ticker-scroll 34s linear infinite;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ticker-track {
+    animation: none;
+  }
+}
