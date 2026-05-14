@@ -19,8 +19,8 @@ Finto/
 │
 ├── frontend/                   # React 19 SPA (Vite)
 │   └── src/
-│       ├── App.tsx             # Router + layout
-│       ├── main.tsx            # AuthProvider sarmalayıcı
+│       ├── App.tsx             # Router + voice/shortcut orkestrasyonu
+│       ├── main.tsx            # Auth + Announcer + Accessibility provider'ları
 │       ├── pages/
 │       │   ├── Home.tsx
 │       │   ├── Dashboard.tsx   # Portföy ekranı
@@ -28,6 +28,9 @@ Finto/
 │       │   └── Profile.tsx
 │       ├── components/
 │       │   ├── GlobalAssistant.tsx
+│       │   ├── AccessibleShell.tsx
+│       │   ├── CommandPalette.tsx
+│       │   ├── AccessibilityTour.tsx
 │       │   └── AuthModal.tsx
 │       ├── contexts/
 │       │   └── AuthContext.tsx
@@ -35,7 +38,13 @@ Finto/
 │       │   ├── usePortfolio.ts     # Anonim → localStorage, giriş → API
 │       │   ├── useStocksQuotes.ts  # Canlı fiyat polling
 │       │   ├── usePredictions.ts   # Teknik tahmin polling
-│       │   └── useVoiceAssistant.ts
+│       │   ├── useVoiceAssistant.ts
+│       │   ├── useKeyboardShortcuts.ts
+│       │   ├── useAccessibilitySettings.tsx
+│       │   ├── useAnnouncer.tsx
+│       │   ├── voiceCommands.ts
+│       │   ├── accessibilityConfig.ts
+│       │   └── appEvents.ts
 │       └── data/
 │           └── bistWatchlist.ts
 │
@@ -60,7 +69,7 @@ Finto/
 | Günlük % değişim      | Yahoo Finance API                            | Her 60 saniyede bir      |
 | Teknik tahminler      | Kendi motoru (gruplanmış skor + ATR)         | Her 5 dakikada bir       |
 | Kullanıcı portföyü    | SQLite (giriş yapıldıysa) / localStorage     | Anlık                    |
-| Sesli yanıtlar        | Google Gemini AI (`gemini-2.0-flash`)        | Streaming                |
+| Sesli yanıtlar        | Google Gemini AI (`gemini-2.5-flash`, env override) | Streaming          |
 
 > Yahoo Finance gecikmeli veri sağlar (~15 dakika). Gerçek zamanlı borsa verisi değildir.
 
@@ -102,6 +111,13 @@ npm run calibrate-thresholds
 - **Python** 3.11+ — [python.org](https://python.org) *(sadece sesli asistan için)*
 - **Google Gemini API key** — [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
 - **Tarayıcı**: Chrome veya Edge (Web Speech API için)
+- **Mikrofon izni**: Tarayıcıda site için aktif olmalı (sesli komutlar için)
+
+### Erişilebilir Mod için ek notlar
+
+- Erişilebilir mod (`Alt+E`) ve klavye kısayolları ek Python bağımlılığı istemez.
+- Komut paleti (`Alt+K`) ve sesli komut akışı frontend+backend birlikte çalışırken aktiftir.
+- En stabil ses tanıma deneyimi için Chrome önerilir.
 
 ### 1. Bağımlılıkları kur
 
@@ -114,6 +130,7 @@ pip install -r requirements.txt
 
 ```env
 GEMINI_API_KEY="..."
+GEMINI_MODEL="gemini-2.5-flash"
 # Üretim için güçlü ve >= 32 karakter bir secret zorunludur.
 JWT_SECRET="local-dev-secret-which-is-at-least-32-characters-long"
 APP_URL="http://localhost:3001"
@@ -192,4 +209,5 @@ npm start
 - Yahoo Finance verisi gecikmelidir (~15 dk); yatırım tavsiyesi değildir.
 - Teknik tahminler kural tabanlıdır; **doğruluk garantisi yoktur**.
 - Web Speech API yalnızca Chrome ve Edge'de çalışır.
+- Erişilebilir mod `Alt+E`, komut paleti `Alt+K` ile açılır.
 - `finto.db` ilk çalıştırmada otomatik oluşur, git'e eklenmez.

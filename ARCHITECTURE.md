@@ -25,8 +25,8 @@ Finto/
 │
 ├── frontend/                 → React web uygulaması
 │   ├── src/
-│   │   ├── App.tsx           → Layout + routing (data işini hook'lara devreder)
-│   │   ├── main.tsx          → AuthProvider sarmalayıcı + React giriş noktası
+│   │   ├── App.tsx           → Layout + routing + voice/shortcut orkestrasyonu
+│   │   ├── main.tsx          → Provider sarmalayıcıları (Auth + Announcer + Accessibility)
 │   │   ├── index.css         → Tailwind CSS import
 │   │   ├── pages/
 │   │   │   ├── Home.tsx      → Ana sayfa: günün hissesi, genel liste
@@ -34,15 +34,24 @@ Finto/
 │   │   │   ├── StockDetail.tsx → Hisse detay sayfası, teknik analiz
 │   │   │   └── Profile.tsx   → Kullanıcı profil sayfası
 │   │   ├── components/
-│   │   │   ├── GlobalAssistant.tsx → Sesli asistan UI (sohbet penceresi)
-│   │   │   └── AuthModal.tsx → Kayıt/giriş modal formu
+│   │   │   ├── GlobalAssistant.tsx → Sesli asistan paneli + event dinleyiciler
+│   │   │   ├── AccessibleShell.tsx → Görme engelli odaklı sade sesli arayüz
+│   │   │   ├── CommandPalette.tsx → Klavye odaklı komut paleti
+│   │   │   ├── AccessibilityTour.tsx → İlk kullanım sesli onboarding
+│   │   │   └── AuthModal.tsx → Kayıt/giriş modal formu (focus trap)
 │   │   ├── contexts/
 │   │   │   └── AuthContext.tsx → Kullanıcı oturumu global state
 │   │   ├── hooks/
 │   │   │   ├── usePortfolio.ts     → Portföy state + mutations (anonim: localStorage, giriş: API)
 │   │   │   ├── useStocksQuotes.ts  → Canlı fiyat polling (60s)
 │   │   │   ├── usePredictions.ts   → Teknik tahmin polling (5dk)
-│   │   │   └── useVoiceAssistant.ts → Web Speech API (mikrofon + TTS)
+│   │   │   ├── useVoiceAssistant.ts → Web Speech API (mikrofon + TTS)
+│   │   │   ├── useKeyboardShortcuts.ts → Özelleştirilebilir global kısayollar
+│   │   │   ├── useAccessibilitySettings.tsx → Erişilebilirlik ayarları + localStorage
+│   │   │   ├── useAnnouncer.tsx → Uygulama geneli aria-live anons katmanı
+│   │   │   ├── voiceCommands.ts → Türkçe sesli komut niyet ayrıştırma
+│   │   │   ├── accessibilityConfig.ts → Komut/kısayol tek kaynak modeli
+│   │   │   └── appEvents.ts → Uygulama içi CustomEvent isimleri
 │   │   └── data/
 │   │       └── bistWatchlist.ts → BIST hisse listesi
 │   ├── index.html
@@ -107,7 +116,7 @@ Finto/
 | Servis | Kullanım |
 |--------|---------|
 | **Yahoo Finance API** | Canlı BIST hisse fiyatları (ücretsiz, gecikmeli) |
-| **Google Gemini AI** | Sesli asistan yanıtları (`gemini-2.0-flash`) |
+| **Google Gemini AI** | Sesli asistan yanıtları (`gemini-2.5-flash`, env ile override) |
 
 ---
 
@@ -118,10 +127,14 @@ Finto/
 │              KULLANICI (Tarayıcı)                │
 │                                                   │
 │  React App (port 3001)                           │
-│  ├── Dashboard    → /api/stocks/quotes (60s)     │
-│  ├── StockDetail  → /api/stocks/predict (5dk)    │
-│  ├── AuthModal    → /api/auth/register|login     │
-│  └── GlobalAssistant → ws://localhost:8001       │
+│  ├── Dashboard / Home / StockDetail              │
+│  │   → /api/stocks/* + /api/portfolio/*          │
+│  ├── AuthModal → /api/auth/*                     │
+│  ├── GlobalAssistant → ws://localhost:8001       │
+│  ├── AccessibleShell → APP_EVENTS üstünden        │
+│  │   assistantListen / assistantQuery            │
+│  └── CommandPalette / Kısayollar                 │
+│      → APP_EVENTS + Router navigasyon            │
 └────────────────┬────────────────────┬────────────┘
                  │                    │
     ┌────────────▼──────────┐   ┌────▼──────────────┐
@@ -177,29 +190,21 @@ Finto/
 
 `backend/predictionEngine.ts` dosyasında uygulanmıştır.
 
-**Giriş:** Son 3 aylık günlük kapanış fiyatları (Yahoo Finance'den)
+**Giriş:** Yahoo Finance'den çekilen yaklaşık 2 yıllık günlük OHLCV verisi.
 
-**Hesaplanan göstergeler:**
-- **SMA5, SMA10, SMA20** — Basit hareketli ortalamalar
-- **RSI14** — Göreceli güç endeksi (0–100)
-- **Momentum** — 5 ve 20 günlük fiyat değişimi
+**Hesaplama blokları:**
+- **Trend grubu:** SMA(5/10/20) konumu, MACD histogram, 5/20 günlük momentum
+- **Osilatör grubu:** RSI(14), Bollinger %B
+- **Hacim teyidi:** Son 5 gün hacminin önceki 15 güne oranı
+- **Dinamik pencere:** Wilder ATR(14)% rejimine göre 48–130 gün
+- **Hedef bandı:** `targetPrice ± 1 ATR`
 
-**Puanlama (-100 ile +100):**
+**Çıktılar:**
+- Trend etiketi: `Yukselis` / `Yatay` / `Dusuk seyir`
+- Skor: `[-100, +100]`
+- `signalConsistencyPercent`: model doğruluğu değil, sinyal tutarlılığı göstergesi
 
-| Sinyal | Etki |
-|--------|------|
-| Fiyat > SMA20'nin %2.5 üstü | +18 puan |
-| SMA5 > SMA20 (altın kesişim) | +16 puan |
-| SMA5 > SMA10 | +8 puan |
-| RSI < 32 (aşırı satış) | +12 puan |
-| RSI > 68 (aşırı alış) | -12 puan |
-| 5 günlük momentum > %4 | +14 puan |
-| 20 günlük momentum > %8 | +10 puan |
-
-**Trend kararı:**
-- Skor ≥ 22 → **Yükseliş**
-- Skor ≤ -22 → **Düşüş**
-- Arada → **Yatay**
+Eşik (`trendThresholdUsed`) değeri gerektiğinde walk-forward kalibrasyonla optimize edilir.
 
 ---
 
@@ -237,6 +242,7 @@ Portföy `localStorage`'da tutulur:
 | `finto_pinned_symbols` | Favoriler |
 | `finto_dark` | Dark mode tercihi |
 | `finto_voice_config` | Ses hızı, tonu vb. |
+| `finto_accessibility_settings` | Kısayollar, erişilebilir mod, kısa metin modu |
 
 **2. Giriş yapmış kullanıcı**
 SQLite tablolarına yazılır: `portfolios`, `holdings`, `transactions`, `preferences`. Alım/satım/transfer işlemleri **atomik SQLite transaction** içinde yürütülür (yetersiz bakiye, overflow vs. kontrolleri).
@@ -248,11 +254,13 @@ SQLite tablolarına yazılır: `portfolios`, `holdings`, `transactions`, `prefer
 ## Sesli Asistan Akışı
 
 ```
-Kullanıcı mikrofona basar
+Kullanıcı mikrofona basar (veya assistantQuery event'i gönderir)
         ↓
 Web Speech API (tarayıcı) → ses → metin dönüşümü
         ↓
-GlobalAssistant.tsx → WebSocket bağlantısı (ws://localhost:8001)
+GlobalAssistant.tsx
+  ├─ önce yerel intent parse (voiceCommands + App handleVoiceCommand)
+  └─ handled değilse WebSocket (ws://localhost:8001)
         ↓
 voice_assistant.py → Gemini API'ye gönderir
         ↓
@@ -261,7 +269,29 @@ Gemini yanıtı token token gelir (streaming)
 Her token → WebSocket chunk → React'ta sohbet baloncuğuna eklenir
         ↓
 Yanıt biter → TTS (SpeechSynthesis API) ile seslendirilir
+        ↓
+assistantResponse event'i ile AccessibleShell "Son söylenen" alanı güncellenir
 ```
+
+---
+
+## Erişilebilirlik Katmanı
+
+Yeni erişilebilirlik mimarisi üç seviyede çalışır:
+
+1. **Ayar ve Konfigürasyon**
+   - `useAccessibilitySettings.tsx` + `accessibilityConfig.ts`
+   - Özelleştirilebilir kısayollar, kısa metin modu, erişilebilir mod bayrağı
+   - localStorage anahtarı: `finto_accessibility_settings`
+
+2. **Girdi Katmanı**
+   - `useKeyboardShortcuts.ts` global kısayolları yönetir (`Alt+A/M/O/K/E`, `Esc`, `Shift+?`, `Shift+G` prefiksi)
+   - `voiceCommands.ts` Türkçe sesli komutları intent'lere çevirir (nakit, portföy özeti, hisseler, al/sat, mod geçişi)
+
+3. **Event Omurgası**
+   - `appEvents.ts` ile UI bileşenleri gevşek bağlı haberleşir
+   - Önemli eventler: `assistantListen`, `assistantSpeak`, `assistantQuery`, `assistantResponse`, `layerCloseTop`
+   - `AccessibleShell`, `GlobalAssistant`, `App` ve modal katmanları aynı event protokolünü paylaşır
 
 ---
 
@@ -270,6 +300,7 @@ Yanıt biter → TTS (SpeechSynthesis API) ile seslendirilir
 ```env
 # Google Gemini AI (sesli asistan için)
 GEMINI_API_KEY="..."
+GEMINI_MODEL="gemini-2.5-flash"   # opsiyonel, varsayılan bu model
 
 # JWT şifreleme anahtarı (güçlü random bir string)
 JWT_SECRET="..."
@@ -353,3 +384,5 @@ npm start
 - **Sesli asistan** için Python sunucusu (`python ai/voice_assistant.py`) ayrı terminalde çalışmalı
 - **SQLite** dosyası (`finto.db`) git'e eklenmez, ilk çalıştırmada otomatik oluşur
 - **Portföy verisi**: anonim ziyaretçi `localStorage`, giriş yapmış kullanıcı SQLite; ilk girişte otomatik import vardır
+- **Erişilebilir mod** (`Alt+E`) ayrı bir sade kabuk (`AccessibleShell`) render eder; sesli işlemler event omurgasıyla GlobalAssistant'a yönlenir
+- **Komut paleti** (`Alt+K`) ve sesli komutlar aynı komut modelini (`accessibilityConfig.ts`) kullanır
