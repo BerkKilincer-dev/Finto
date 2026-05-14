@@ -3,7 +3,8 @@ export type ShortcutActionId =
   | 'startListening'
   | 'readPage'
   | 'openCommandPalette'
-  | 'closeTopLayer';
+  | 'closeTopLayer'
+  | 'toggleAccessibleMode';
 
 export type ShortcutSpec = {
   key: string;
@@ -21,11 +22,20 @@ export const DEFAULT_SHORTCUTS: ShortcutMap = {
   readPage: { alt: true, key: 'o' },
   openCommandPalette: { alt: true, key: 'k' },
   closeTopLayer: { key: 'Escape' },
+  toggleAccessibleMode: { alt: true, key: 'e' },
 };
+
+function normalizeKeyName(raw: string): string {
+  const key = raw.trim().toLowerCase();
+  if (key === 'esc') return 'escape';
+  if (key === 'return') return 'enter';
+  if (key === 'spacebar' || key === 'space') return ' ';
+  return key;
+}
 
 export function normalizeShortcut(input: ShortcutSpec): ShortcutSpec {
   return {
-    key: input.key.length === 1 ? input.key.toLowerCase() : input.key,
+    key: normalizeKeyName(input.key),
     alt: !!input.alt,
     shift: !!input.shift,
     ctrl: !!input.ctrl,
@@ -34,18 +44,34 @@ export function normalizeShortcut(input: ShortcutSpec): ShortcutSpec {
 }
 
 export function formatShortcut(spec: ShortcutSpec): string {
+  const normalized = normalizeShortcut(spec);
   const parts: string[] = [];
-  if (spec.ctrl) parts.push('Ctrl');
-  if (spec.alt) parts.push('Alt');
-  if (spec.shift) parts.push('Shift');
-  if (spec.meta) parts.push('Meta');
-  parts.push(spec.key.length === 1 ? spec.key.toUpperCase() : spec.key);
+  if (normalized.ctrl) parts.push('Ctrl');
+  if (normalized.alt) parts.push('Alt');
+  if (normalized.shift) parts.push('Shift');
+  if (normalized.meta) parts.push('Meta');
+  const prettyKeyMap: Record<string, string> = {
+    escape: 'Esc',
+    enter: 'Enter',
+    tab: 'Tab',
+    backspace: 'Backspace',
+    delete: 'Delete',
+    arrowup: 'ArrowUp',
+    arrowdown: 'ArrowDown',
+    arrowleft: 'ArrowLeft',
+    arrowright: 'ArrowRight',
+    ' ': 'Space',
+  };
+  parts.push(
+    prettyKeyMap[normalized.key] ??
+      (normalized.key.length === 1 ? normalized.key.toUpperCase() : normalized.key),
+  );
   return parts.join('+');
 }
 
 export function matchesShortcut(event: KeyboardEvent, spec: ShortcutSpec): boolean {
   const normalized = normalizeShortcut(spec);
-  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  const key = normalizeKeyName(event.key);
   return (
     key === normalized.key &&
     event.altKey === normalized.alt &&
@@ -64,7 +90,8 @@ export type CommandItem = {
     | 'go-portfolio'
     | 'go-profile'
     | 'close-layer'
-    | 'shortcut-help';
+    | 'shortcut-help'
+    | 'toggle-accessible-mode';
   title: string;
   description: string;
   shortcutActionId?: ShortcutActionId;
@@ -124,6 +151,13 @@ export const COMMAND_ITEMS: CommandItem[] = [
     description: 'Tüm global kısayolları anons eder.',
     voiceExamples: ['yardım', 'kısayollar'],
   },
+  {
+    id: 'toggle-accessible-mode',
+    title: 'Erişilebilir modu aç / kapat',
+    description: 'Sade, liste tabanlı erişilebilir arayüze geçer veya normale döner.',
+    shortcutActionId: 'toggleAccessibleMode',
+    voiceExamples: ['erişilebilir mod', 'sade görünüm', 'normal görünüm'],
+  },
 ];
 
 export function getGlobalHint(shortcuts: ShortcutMap): string {
@@ -132,6 +166,7 @@ export function getGlobalHint(shortcuts: ShortcutMap): string {
     `${formatShortcut(shortcuts.startListening)} mikrofon, ` +
     `${formatShortcut(shortcuts.readPage)} sayfayı oku, ` +
     `${formatShortcut(shortcuts.openCommandPalette)} komut paleti, ` +
+    `${formatShortcut(shortcuts.toggleAccessibleMode)} erişilebilir mod, ` +
     `${formatShortcut(shortcuts.closeTopLayer)} kapat. ` +
     'Navigasyon için Shift+G sonra: H ana sayfa, P portföy, R profil.'
   );

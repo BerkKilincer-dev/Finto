@@ -9,6 +9,8 @@ export type ShortcutHandlers = {
   onOpenCommandPalette?: () => void;
   /** Sesli "sayfayı oku" eşdeğeri */
   onReadPage?: () => void;
+  /** Erişilebilir mod aç/kapat */
+  onToggleAccessibleMode?: () => void;
 };
 
 /**
@@ -75,6 +77,11 @@ export function useKeyboardShortcuts(
         e.preventDefault();
         handlers.onOpenCommandPalette?.();
         announce?.('Komut paleti');
+        return;
+      }
+      if (matchesShortcut(e, shortcuts.toggleAccessibleMode)) {
+        e.preventDefault();
+        handlers.onToggleAccessibleMode?.();
         return;
       }
 

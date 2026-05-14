@@ -255,8 +255,17 @@ export function usePortfolio(stocks: MarketStock[]): PortfolioApi {
   }, [snap.holdings, user]);
 
   // ---- Mutations ----
-  const fmtTry = (n: number) =>
-    n.toLocaleString('tr-TR', { style: 'currency', currency: 'TRY', maximumFractionDigits: 2 });
+  // TTS dostu: "₺1.234,56" yerine "1234 lira" — ekran okuyucu binlik ayracı doğru telaffuz edemiyor.
+  const fmtTry = (n: number) => {
+    if (!Number.isFinite(n)) return '0 lira';
+    const sign = n < 0 ? 'eksi ' : '';
+    const abs = Math.abs(n);
+    const lira = Math.floor(abs);
+    const kurus = Math.round((abs - lira) * 100);
+    if (kurus === 0) return `${sign}${lira} lira`;
+    if (kurus === 100) return `${sign}${lira + 1} lira`;
+    return `${sign}${lira} lira ${kurus} kuruş`;
+  };
 
   const localMutate = useCallback((updater: (s: Snapshot) => Snapshot) => {
     setSnap((prev) => updater(prev));
@@ -289,8 +298,6 @@ export function usePortfolio(stocks: MarketStock[]): PortfolioApi {
       }
 
       // Local mod
-      if (!snap.registeredSymbols.includes(symbol))
-        return { ok: false, message: 'Önce hisseyi kayıtlı hisselere ekleyin.' };
       const cost = stock.price * quantity;
       if (cost > snap.cashBalance) return { ok: false, message: 'Yetersiz nakit bakiye.' };
 
@@ -304,14 +311,17 @@ export function usePortfolio(stocks: MarketStock[]): PortfolioApi {
               const weightedAvg = (h.averageCost * h.quantity + cost) / newQty;
               return { ...h, quantity: newQty, averageCost: weightedAvg };
             });
+        const registeredSymbols = prev.registeredSymbols.includes(symbol)
+          ? prev.registeredSymbols
+          : [...prev.registeredSymbols, symbol];
         return addLocalTx(
-          { ...prev, cashBalance: prev.cashBalance - cost, holdings },
+          { ...prev, cashBalance: prev.cashBalance - cost, holdings, registeredSymbols },
           { type: 'buy', amount: cost, symbol, quantity },
         );
       });
       return { ok: true, message: `${symbol} için ${quantity} lot alım gerçekleşti.` };
     },
-    [user, stocks, snap.cashBalance, snap.registeredSymbols, localMutate],
+    [user, stocks, snap.cashBalance, localMutate],
   );
 
   const sellStock = useCallback(

@@ -19,11 +19,13 @@ type AccessibilitySettings = {
   conciseMode: boolean;
   shortcuts: ShortcutMap;
   onboardingSeen: boolean;
+  accessibleMode: boolean;
 };
 
 type AccessibilityApi = AccessibilitySettings & {
   setConciseMode: (value: boolean) => void;
   setOnboardingSeen: (value: boolean) => void;
+  setAccessibleMode: (value: boolean) => void;
   setShortcut: (actionId: ShortcutActionId, value: ShortcutSpec) => void;
   resetShortcuts: () => void;
 };
@@ -34,6 +36,7 @@ const DEFAULT_SETTINGS: AccessibilitySettings = {
   conciseMode: false,
   shortcuts: DEFAULT_SHORTCUTS,
   onboardingSeen: false,
+  accessibleMode: false,
 };
 
 const AccessibilityContext = createContext<AccessibilityApi | null>(null);
@@ -52,6 +55,7 @@ function loadInitialSettings(): AccessibilitySettings {
     return {
       conciseMode: !!parsed.conciseMode,
       onboardingSeen: !!parsed.onboardingSeen,
+      accessibleMode: !!parsed.accessibleMode,
       shortcuts: mergedShortcuts,
     };
   } catch {
@@ -74,6 +78,10 @@ export function AccessibilitySettingsProvider({ children }: { children: ReactNod
     setSettings((prev) => ({ ...prev, onboardingSeen: value }));
   }, []);
 
+  const setAccessibleMode = useCallback((value: boolean) => {
+    setSettings((prev) => ({ ...prev, accessibleMode: value }));
+  }, []);
+
   const setShortcut = useCallback((actionId: ShortcutActionId, value: ShortcutSpec) => {
     setSettings((prev) => ({
       ...prev,
@@ -93,12 +101,14 @@ export function AccessibilitySettingsProvider({ children }: { children: ReactNod
       conciseMode: settings.conciseMode,
       shortcuts: settings.shortcuts,
       onboardingSeen: settings.onboardingSeen,
+      accessibleMode: settings.accessibleMode,
       setConciseMode,
       setOnboardingSeen,
+      setAccessibleMode,
       setShortcut,
       resetShortcuts,
     }),
-    [settings, setConciseMode, setOnboardingSeen, setShortcut, resetShortcuts],
+    [settings, setConciseMode, setOnboardingSeen, setAccessibleMode, setShortcut, resetShortcuts],
   );
 
   return <AccessibilityContext.Provider value={value}>{children}</AccessibilityContext.Provider>;
@@ -111,8 +121,10 @@ export function useAccessibilitySettings(): AccessibilityApi {
       conciseMode: false,
       shortcuts: DEFAULT_SHORTCUTS,
       onboardingSeen: false,
+      accessibleMode: false,
       setConciseMode: () => {},
       setOnboardingSeen: () => {},
+      setAccessibleMode: () => {},
       setShortcut: () => {},
       resetShortcuts: () => {},
     };

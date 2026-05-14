@@ -104,6 +104,9 @@ export default function GlobalAssistant({ onVoiceCommand, shortcuts }: GlobalAss
 
   const addMessage = useCallback((msg: Message) => {
     setMessages((prev) => [...prev, msg]);
+    if (msg.role === 'assistant') {
+      window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantResponse, { detail: { text: msg.text } }));
+    }
   }, []);
 
   const doSpeak = useCallback(
@@ -273,10 +276,10 @@ export default function GlobalAssistant({ onVoiceCommand, shortcuts }: GlobalAss
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data as string) as { type: string; text?: string };
-        if (msg.type === 'greeting' && msg.text) {
-          addMessage({ role: 'assistant', text: msg.text });
-          // Karşılama bittikten sonra (hands-free açıksa) doğrudan dinlemeye geç.
-          doSpeak(msg.text, { thenListen: true });
+        if (msg.type === 'greeting') {
+          // Açılışta otomatik "Merhaba" mesajını göstermiyoruz/okutmuyoruz.
+          // Kullanıcı etkileşimi sonrası konuşma akışı başlayacak.
+          return;
         }
       } catch {
         /* ignore */
@@ -290,7 +293,7 @@ export default function GlobalAssistant({ onVoiceCommand, shortcuts }: GlobalAss
       });
       announce('Sesli asistan sunucusuna bağlanılamadı.', 'assertive');
     };
-  }, [addMessage, doSpeak, announce]);
+  }, [announce]);
 
   const openAssistant = useCallback(() => {
     focusBeforeOpenRef.current = document.activeElement as HTMLElement | null;
@@ -338,6 +341,15 @@ export default function GlobalAssistant({ onVoiceCommand, shortcuts }: GlobalAss
         if (isOpenRef.current) addMessage({ role: 'assistant', text: detail.text });
       }
     }
+    function onQuery(e: Event) {
+      const detail = (e as CustomEvent<{ text?: string }>).detail;
+      const text = detail?.text?.trim();
+      if (!text) return;
+      if (!isOpenRef.current) openAssistant();
+      setTimeout(() => {
+        void handleQuery(text);
+      }, 180);
+    }
     function onClose() {
       if (isOpenRef.current) closeAssistant();
     }
@@ -347,16 +359,18 @@ export default function GlobalAssistant({ onVoiceCommand, shortcuts }: GlobalAss
     window.addEventListener(APP_EVENTS.assistantToggle, onToggle);
     window.addEventListener(APP_EVENTS.assistantListen, onListen);
     window.addEventListener(APP_EVENTS.assistantSpeak, onSpeak as EventListener);
+    window.addEventListener(APP_EVENTS.assistantQuery, onQuery as EventListener);
     window.addEventListener(APP_EVENTS.assistantClose, onClose);
     window.addEventListener(APP_EVENTS.layerCloseTop, onLayerCloseTop);
     return () => {
       window.removeEventListener(APP_EVENTS.assistantToggle, onToggle);
       window.removeEventListener(APP_EVENTS.assistantListen, onListen);
       window.removeEventListener(APP_EVENTS.assistantSpeak, onSpeak as EventListener);
+      window.removeEventListener(APP_EVENTS.assistantQuery, onQuery as EventListener);
       window.removeEventListener(APP_EVENTS.assistantClose, onClose);
       window.removeEventListener(APP_EVENTS.layerCloseTop, onLayerCloseTop);
     };
-  }, [toggleAssistant, openAssistant, closeAssistant, startListening, doSpeak, addMessage]);
+  }, [toggleAssistant, openAssistant, closeAssistant, startListening, doSpeak, addMessage, handleQuery]);
 
   useEffect(() => {
     if (!isOpen) return;

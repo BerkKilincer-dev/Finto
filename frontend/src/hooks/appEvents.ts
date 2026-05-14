@@ -2,6 +2,8 @@ export const APP_EVENTS = {
   assistantToggle: 'finto:assistant:toggle',
   assistantListen: 'finto:assistant:listen',
   assistantSpeak: 'finto:assistant:speak',
+  assistantQuery: 'finto:assistant:query',
+  assistantResponse: 'finto:assistant:response',
   assistantClose: 'finto:assistant:close',
   layerCloseTop: 'finto:layer:close-top',
   onboardingRestart: 'finto:onboarding:restart',

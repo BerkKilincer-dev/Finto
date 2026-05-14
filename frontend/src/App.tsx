@@ -1,13 +1,15 @@
 import { BrowserRouter as Router, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import GlobalAssistant, { type VoiceCommandHandler } from './components/GlobalAssistant';
 import CommandPalette from './components/CommandPalette';
+import AccessibilityTour from './components/AccessibilityTour';
+import AccessibleShell from './components/AccessibleShell';
 import Home from './pages/Home';
 import Dashboard from './pages/Dashboard';
 import StockDetail from './pages/StockDetail';
 import Profile from './pages/Profile';
 import AuthModal from './components/AuthModal';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Moon, Sun, User, LogIn, Volume2, Command } from 'lucide-react';
+import { Moon, Sun, User, LogIn, Command } from 'lucide-react';
 import { useAuth } from './contexts/AuthContext.tsx';
 import { useStocksQuotes } from './hooks/useStocksQuotes';
 import { usePredictions } from './hooks/usePredictions';
@@ -17,9 +19,9 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { parseVoiceCommand } from './hooks/voiceCommands';
 import { BIST_SYMBOLS } from './data/bistWatchlist';
 import type { MarketStock } from './hooks/useStocksQuotes';
+import type { TechnicalPrediction } from '../../backend/predictionEngine.ts';
 import {
   COMMAND_ITEMS,
-  DEFAULT_SHORTCUTS,
   formatShortcut,
   getGlobalHint,
   type CommandItem,
@@ -33,8 +35,20 @@ const ROUTE_TITLES: Record<string, string> = {
   '/profile': 'Profilim',
 };
 
+/**
+ * TTS için sayı: "₺1.234,56" yerine "1234 lira 56 kuruş" — ekran okuyucular
+ * binlik ayraç ve "₺" sembolünü doğru telaffuz edemiyor. Bu dosyadaki tüm
+ * çağrılar sesli okutma içindir; görsel UI başka yerde format alıyor.
+ */
 function fmtTry(n: number): string {
-  return n.toLocaleString('tr-TR', { style: 'currency', currency: 'TRY', maximumFractionDigits: 2 });
+  if (!Number.isFinite(n)) return '0 lira';
+  const sign = n < 0 ? 'eksi ' : '';
+  const abs = Math.abs(n);
+  const lira = Math.floor(abs);
+  const kurus = Math.round((abs - lira) * 100);
+  if (kurus === 0) return `${sign}${lira} lira`;
+  if (kurus === 100) return `${sign}${lira + 1} lira`;
+  return `${sign}${lira} lira ${kurus} kuruş`;
 }
 
 /**
@@ -93,30 +107,98 @@ function buildPageSpeech(
   return el ? el.innerText.slice(0, conciseMode ? 320 : 600) : 'Bu sayfada sesli olarak okunacak ek bilgi yok.';
 }
 
+function trendToTr(t: TechnicalPrediction['trend']): string {
+  if (t === 'Yukselis') return 'yükseliş';
+  if (t === 'Dusuk seyir') return 'düşüş';
+  return 'yatay';
+}
+
+function buildStocksSpeech(stocks: MarketStock[], count: number): string {
+  const top = stocks.slice(0, count);
+  if (top.length === 0) return 'Şu anda gösterilebilecek hisse yok.';
+  const lines = top.map((s) => {
+    const dir = s.dailyChangePercent >= 0 ? 'yükselişte' : 'düşüşte';
+    return `${s.name}, ${fmtTry(s.price)}, yüzde ${Math.abs(s.dailyChangePercent).toFixed(2)} ${dir}`;
+  });
+  return `İlk ${top.length} hisse: ` + lines.join('. ') + '.';
+}
+
+function buildPredictionsSpeech(
+  predictions: Record<string, TechnicalPrediction>,
+  stocks: MarketStock[],
+  count: number,
+): string {
+  const entries = Object.values(predictions).sort((a, b) => Math.abs(b.score) - Math.abs(a.score));
+  const top = entries.slice(0, count);
+  if (top.length === 0) return 'Henüz hazır tahmin yok, lütfen biraz sonra tekrar deneyin.';
+  const parts = top.map((p) => {
+    const stock = stocks.find((s) => s.symbol === p.symbol);
+    const name = stock?.name ?? p.symbol;
+    return `${name}: ${trendToTr(p.trend)}, hedef ${fmtTry(p.targetPrice)}, güven yüzde ${p.signalConsistencyPercent}`;
+  });
+  return `En güçlü ${top.length} tahmin. ` + parts.join('. ') + '.';
+}
+
+function buildSinglePredictionSpeech(
+  symbol: string,
+  predictions: Record<string, TechnicalPrediction>,
+  stocks: MarketStock[],
+): string {
+  const p = predictions[symbol];
+  const stock = stocks.find((s) => s.symbol === symbol);
+  const name = stock?.name ?? symbol;
+  if (!p) return `${name} için henüz hazır tahmin yok.`;
+  const driverText = p.drivers && p.drivers.length > 0 ? ` Etkenler: ${p.drivers.slice(0, 3).join(', ')}.` : '';
+  return (
+    `${name} için ${p.horizon} tahmini: ${trendToTr(p.trend)}. ` +
+    `Hedef fiyat ${fmtTry(p.targetPrice)}, alt sınır ${fmtTry(p.targetPriceLow)}, üst sınır ${fmtTry(p.targetPriceHigh)}. ` +
+    `Sinyal tutarlılığı yüzde ${p.signalConsistencyPercent}. ${p.summary}.${driverText}`
+  );
+}
+
+function holdingsDetailLine(
+  portfolio: PortfolioApi,
+  stocks: MarketStock[],
+  conciseMode: boolean,
+): string {
+  return portfolio.holdings
+    .map((h) => {
+      const stock = stocks.find((s) => s.symbol === h.symbol);
+      const value = stock ? stock.price * h.quantity : h.quantity * h.averageCost;
+      if (conciseMode) {
+        return `${stock?.name ?? h.symbol} ${h.quantity} lot, ${fmtTry(value)}`;
+      }
+      const pnl = stock ? (stock.price - h.averageCost) * h.quantity : 0;
+      const pnlTxt = pnl >= 0 ? `${fmtTry(pnl)} karda` : `${fmtTry(Math.abs(pnl))} zararda`;
+      return `${stock?.name ?? h.symbol} ${h.quantity} lot, değer ${fmtTry(value)}, ${pnlTxt}`;
+    })
+    .join('. ');
+}
+
 function buildPortfolioSpeech(portfolio: PortfolioApi, stocks: MarketStock[], conciseMode: boolean): string {
   const lines = [
-    `Toplam varlığınız ${fmtTry(portfolio.totalBalance)}, nakit ${fmtTry(portfolio.cashBalance)}, hisse değeri ${fmtTry(
+    `Toplam varlığınız ${fmtTry(portfolio.totalBalance)}. Nakit ${fmtTry(portfolio.cashBalance)}. Hisselerinizin toplam değeri ${fmtTry(
       portfolio.holdingsValue,
     )}.`,
   ];
   if (portfolio.holdings.length === 0) {
     lines.push('Hiç hisse pozisyonunuz yok.');
   } else {
-    const detail = portfolio.holdings
-      .map((h) => {
-        const stock = stocks.find((s) => s.symbol === h.symbol);
-        const value = stock ? stock.price * h.quantity : h.quantity * h.averageCost;
-        if (conciseMode) {
-          return `${stock?.symbol ?? h.symbol} ${h.quantity} lot, ${fmtTry(value)}`;
-        }
-        const pnl = stock ? (stock.price - h.averageCost) * h.quantity : 0;
-        const pnlTxt = pnl >= 0 ? `${fmtTry(pnl)} karda` : `${fmtTry(Math.abs(pnl))} zararda`;
-        return `${stock?.name ?? h.symbol} ${h.quantity} lot, değer ${fmtTry(value)}, ${pnlTxt}`;
-      })
-      .join('. ');
-    lines.push(detail + '.');
+    lines.push(`${portfolio.holdings.length} farklı hissede pozisyonunuz var.`);
+    lines.push(holdingsDetailLine(portfolio, stocks, conciseMode) + '.');
   }
   return lines.join(' ');
+}
+
+function buildHoldingsSpeech(portfolio: PortfolioApi, stocks: MarketStock[], conciseMode: boolean): string {
+  if (portfolio.holdings.length === 0) {
+    return 'Şu anda hiç hisseniz yok. Hisse almak için örneğin "Aselsan beş lot al" diyebilirsiniz.';
+  }
+  return (
+    `${portfolio.holdings.length} farklı hissede pozisyonunuz var. ` +
+    holdingsDetailLine(portfolio, stocks, conciseMode) +
+    '.'
+  );
 }
 
 export default function App() {
@@ -134,11 +216,12 @@ function AppShell() {
   const {
     conciseMode,
     shortcuts,
-    onboardingSeen,
     setOnboardingSeen,
     setConciseMode,
     setShortcut,
     resetShortcuts,
+    accessibleMode,
+    setAccessibleMode,
   } = useAccessibilitySettings();
   const { stocks, lastUpdated, marketDataWarning } = useStocksQuotes();
   const { predictions, predictLoading, predictUpdatedAt, loadPredictions } = usePredictions();
@@ -157,21 +240,14 @@ function AppShell() {
     document.title = `${title} · Finto`;
     announce(`${title} sayfası açıldı`);
     // Odağı main'e taşı — ekran okuyucu yeni içerikten okumaya başlar.
-    const main = document.getElementById('main-content');
+    const main =
+      document.getElementById('a11y-main') ?? document.getElementById('main-content');
     if (main) (main as HTMLElement).focus({ preventScroll: false });
   }, [location.pathname, announce, stocks]);
 
   useEffect(() => {
     if (marketDataWarning) announce(marketDataWarning, 'assertive');
   }, [marketDataWarning, announce]);
-
-  useEffect(() => {
-    if (onboardingSeen) return;
-    const hint = getGlobalHint(shortcuts);
-    announce(`Erişilebilirlik turu başladı. ${hint}`, 'polite');
-    window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantSpeak, { detail: { text: hint } }));
-    setOnboardingSeen(true);
-  }, [onboardingSeen, shortcuts, announce, setOnboardingSeen]);
 
   useEffect(() => {
     function onRestart() {
@@ -200,6 +276,12 @@ function AppShell() {
     const text = buildPageSpeech(location.pathname, portfolio, stocks, conciseMode);
     window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantSpeak, { detail: { text } }));
   }, [location.pathname, portfolio, stocks, conciseMode]);
+
+  const toggleAccessibleMode = useCallback(() => {
+    const next = !accessibleMode;
+    setAccessibleMode(next);
+    announce(next ? 'Erişilebilir görünüme geçildi.' : 'Normal görünüme geçildi.', 'polite');
+  }, [accessibleMode, setAccessibleMode, announce]);
 
   const runCommand = useCallback(
     (commandId: CommandItem['id']) => {
@@ -235,9 +317,13 @@ function AppShell() {
         const text = getGlobalHint(shortcuts);
         announce(text, 'polite');
         window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantSpeak, { detail: { text } }));
+        return;
+      }
+      if (commandId === 'toggle-accessible-mode') {
+        toggleAccessibleMode();
       }
     },
-    [announce, closeTopLayer, handleReadPage, navigate, shortcuts],
+    [announce, closeTopLayer, handleReadPage, navigate, shortcuts, toggleAccessibleMode],
   );
 
   // Sesli komut → yerel intent
@@ -253,6 +339,16 @@ function AppShell() {
         window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantClose));
         return { handled: true, reply: 'Tamam, kapatıyorum.' };
       }
+      if (intent.type === 'set-mode') {
+        const wantAccessible = intent.mode === 'accessible';
+        setAccessibleMode(wantAccessible);
+        return {
+          handled: true,
+          reply: wantAccessible
+            ? 'Erişilebilir görünüme geçildi.'
+            : 'Normal görünüme geçildi.',
+        };
+      }
       if (intent.type === 'navigate') {
         if (intent.to === 'stock' && intent.symbol) {
           navigate(`/stock/${intent.symbol.toLowerCase()}`);
@@ -265,8 +361,11 @@ function AppShell() {
         }
       }
       if (intent.type === 'read') {
-        if (intent.what === 'portfolio' || intent.what === 'holdings') {
+        if (intent.what === 'portfolio') {
           return { handled: true, reply: buildPortfolioSpeech(portfolio, stocks, conciseMode) };
+        }
+        if (intent.what === 'holdings') {
+          return { handled: true, reply: buildHoldingsSpeech(portfolio, stocks, conciseMode) };
         }
         if (intent.what === 'cash') {
           return { handled: true, reply: `Nakit bakiyeniz ${fmtTry(portfolio.cashBalance)}.` };
@@ -283,9 +382,32 @@ function AppShell() {
         const res = await portfolio.sellStock(intent.symbol, intent.quantity);
         return { handled: true, reply: res.message };
       }
+      if (intent.type === 'list-stocks') {
+        return { handled: true, reply: buildStocksSpeech(stocks, intent.count ?? 5) };
+      }
+      if (intent.type === 'list-predictions') {
+        return {
+          handled: true,
+          reply: buildPredictionsSpeech(predictions, stocks, intent.count ?? 5),
+        };
+      }
+      if (intent.type === 'stock-price') {
+        const s = stocks.find((x) => x.symbol === intent.symbol);
+        if (!s) return { handled: true, reply: `${intent.symbol} listemde yok.` };
+        const dir = s.dailyChangePercent >= 0 ? 'yükselişte' : 'düşüşte';
+        return {
+          handled: true,
+          reply: `${s.name}, sembol ${s.symbol}, fiyatı ${fmtTry(s.price)}, gün içi yüzde ${Math.abs(
+            s.dailyChangePercent,
+          ).toFixed(2)} ${dir}.`,
+        };
+      }
+      if (intent.type === 'stock-prediction') {
+        return { handled: true, reply: buildSinglePredictionSpeech(intent.symbol, predictions, stocks) };
+      }
       return { handled: false };
     },
-    [navigate, portfolio, stocks, location.pathname, conciseMode, shortcuts],
+    [navigate, portfolio, stocks, predictions, location.pathname, conciseMode, shortcuts, setAccessibleMode],
   );
 
   // Klavye kısayolları
@@ -296,6 +418,7 @@ function AppShell() {
       onCloseTopLayer: closeTopLayer,
       onOpenCommandPalette: () => setIsCommandPaletteOpen(true),
       onReadPage: handleReadPage,
+      onToggleAccessibleMode: toggleAccessibleMode,
     },
     shortcuts,
     announce,
@@ -334,11 +457,33 @@ function AppShell() {
 
   const { user } = useAuth();
 
+  if (accessibleMode) {
+    return (
+      <>
+        <AccessibleShell
+          portfolio={portfolio}
+          stocks={stocks}
+          marketDataWarning={marketDataWarning}
+          onOpenAuth={() => setShowAuthModal(true)}
+        />
+        {showAuthModal && <AuthModal onClose={() => setShowAuthModal(false)} />}
+        <CommandPalette
+          isOpen={isCommandPaletteOpen}
+          commands={COMMAND_ITEMS}
+          onRunCommand={runCommand}
+          onClose={() => setIsCommandPaletteOpen(false)}
+        />
+        <GlobalAssistant onVoiceCommand={handleVoiceCommand} shortcuts={shortcuts} />
+      </>
+    );
+  }
+
   return (
     <div className={`min-h-screen ai-grid-bg font-sans selection:bg-blue-200 text-slate-900 dark:text-slate-100 flex flex-col relative overflow-x-hidden`}>
         <a href="#main-content" className="skip-to-content">
           Ana içeriğe atla
         </a>
+        <AccessibilityTour />
         <header role="banner" className="ai-glass ai-neon-border sticky top-0 z-40">
           <div className="max-w-5xl mx-auto px-4 md:px-8 h-16 md:h-20 flex items-center justify-between">
             <Link
@@ -354,15 +499,6 @@ function AppShell() {
                 <Link to="/" className="px-3 py-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-slate-800 hover:text-blue-700 dark:hover:text-blue-300 transition-colors">Ana Sayfa</Link>
                 <Link to="/portfolio" className="px-3 py-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-slate-800 hover:text-blue-700 dark:hover:text-blue-300 transition-colors">Portföyüm</Link>
               </nav>
-              <button
-                onClick={handleReadPage}
-                className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-200 transition-colors"
-                aria-label={`Sayfayı sesli oku (${formatShortcut(shortcuts.readPage)} kısayolu)`}
-                aria-keyshortcuts={formatShortcut(shortcuts.readPage)}
-                title={`Sayfayı sesli oku (${formatShortcut(shortcuts.readPage)})`}
-              >
-                <Volume2 size={18} aria-hidden="true" />
-              </button>
               <button
                 onClick={() => setIsCommandPaletteOpen(true)}
                 className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-200 transition-colors"

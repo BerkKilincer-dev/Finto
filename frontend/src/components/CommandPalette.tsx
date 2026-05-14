@@ -15,6 +15,7 @@ export default function CommandPalette({
   onClose,
 }: CommandPaletteProps) {
   const [query, setQuery] = useState('');
+  const [activeIndex, setActiveIndex] = useState(0);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -25,6 +26,8 @@ export default function CommandPalette({
       return (cmd.voiceExamples ?? []).some((v) => v.toLowerCase().includes(q));
     });
   }, [query, commands]);
+
+  const selected = filtered[activeIndex] ?? filtered[0];
 
   if (!isOpen) return null;
 
@@ -41,17 +44,33 @@ export default function CommandPalette({
             type="search"
             autoFocus
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setActiveIndex(0);
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Escape') {
                 e.preventDefault();
                 onClose();
                 return;
               }
-              if (e.key === 'Enter' && filtered[0]) {
+              if (e.key === 'ArrowDown') {
                 e.preventDefault();
-                onRunCommand(filtered[0].id);
+                setActiveIndex((prev) => (filtered.length === 0 ? 0 : (prev + 1) % filtered.length));
+                return;
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setActiveIndex((prev) =>
+                  filtered.length === 0 ? 0 : (prev - 1 + filtered.length) % filtered.length,
+                );
+                return;
+              }
+              if (e.key === 'Enter' && selected) {
+                e.preventDefault();
+                onRunCommand(selected.id);
                 setQuery('');
+                setActiveIndex(0);
                 onClose();
               }
             }}
@@ -65,16 +84,21 @@ export default function CommandPalette({
               Eşleşen komut bulunamadı.
             </p>
           ) : (
-            filtered.map((cmd) => (
+            filtered.map((cmd, idx) => (
               <button
                 key={cmd.id}
                 type="button"
                 onClick={() => {
                   onRunCommand(cmd.id);
                   setQuery('');
+                  setActiveIndex(0);
                   onClose();
                 }}
-                className="w-full text-left px-4 py-3 border-b border-slate-100 dark:border-slate-700 last:border-b-0 hover:bg-slate-50 dark:hover:bg-slate-700/60 transition-colors"
+                className={`w-full text-left px-4 py-3 border-b border-slate-100 dark:border-slate-700 last:border-b-0 transition-colors ${
+                  idx === activeIndex
+                    ? 'bg-blue-50 dark:bg-blue-900/20'
+                    : 'hover:bg-slate-50 dark:hover:bg-slate-700/60'
+                }`}
               >
                 <p className="text-sm font-black text-slate-900 dark:text-white">{cmd.title}</p>
                 <p className="text-xs mt-1 text-slate-500 dark:text-slate-400">{cmd.description}</p>

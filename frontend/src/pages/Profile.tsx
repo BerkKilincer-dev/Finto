@@ -159,8 +159,9 @@ export default function Profile({
     if (tokens.length === 0) return null;
     const key = tokens[tokens.length - 1];
     if (!key) return null;
+    const normalizedKey = key === 'esc' ? 'escape' : key === 'return' ? 'enter' : key;
     return {
-      key: key.length === 1 ? key : key === 'esc' ? 'Escape' : key,
+      key: normalizedKey,
       alt: tokens.includes('alt'),
       shift: tokens.includes('shift'),
       ctrl: tokens.includes('ctrl'),
