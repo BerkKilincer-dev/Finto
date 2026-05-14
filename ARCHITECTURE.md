@@ -16,17 +16,21 @@ Finto, Borsa İstanbul (BIST) hisselerini takip eden, teknik analiz tahminleri s
 Finto/
 ├── backend/                  → Node.js API sunucusu
 │   ├── server.ts             → Express ana sunucu, tüm API endpoint'leri
-│   ├── predictionEngine.ts   → Teknik analiz algoritması
-│   ├── auth.ts               → Kullanıcı kayıt/giriş endpoint'leri
-│   └── db.ts                 → SQLite bağlantısı ve şema
+│   ├── predictionEngine.ts   → Teknik analiz algoritması (gruplanmış skor, ATR)
+│   ├── auth.ts               → Kullanıcı kayıt/giriş + JWT cookie + requireAuth middleware
+│   ├── portfolio.ts          → Kullanıcı portföyü (cash, holdings, transactions)
+│   ├── yahooClient.ts        → Yahoo Finance HTTP istemcisi (timeout + retry)
+│   ├── thresholdDefaults.ts  → Trend eşiği (env override destekli)
+│   └── db.ts                 → SQLite bağlantısı, WAL + tüm tablolar
 │
 ├── frontend/                 → React web uygulaması
 │   ├── src/
-│   │   ├── App.tsx           → Ana uygulama, global state, routing
-│   │   ├── main.tsx          → React giriş noktası
+│   │   ├── App.tsx           → Layout + routing (data işini hook'lara devreder)
+│   │   ├── main.tsx          → AuthProvider sarmalayıcı + React giriş noktası
 │   │   ├── index.css         → Tailwind CSS import
 │   │   ├── pages/
-│   │   │   ├── Dashboard.tsx → Ana sayfa: portföy, piyasa listesi, işlemler
+│   │   │   ├── Home.tsx      → Ana sayfa: günün hissesi, genel liste
+│   │   │   ├── Dashboard.tsx → Portföy ekranı: alım/satım, nakit yönetimi
 │   │   │   ├── StockDetail.tsx → Hisse detay sayfası, teknik analiz
 │   │   │   └── Profile.tsx   → Kullanıcı profil sayfası
 │   │   ├── components/
@@ -35,16 +39,19 @@ Finto/
 │   │   ├── contexts/
 │   │   │   └── AuthContext.tsx → Kullanıcı oturumu global state
 │   │   ├── hooks/
+│   │   │   ├── usePortfolio.ts     → Portföy state + mutations (anonim: localStorage, giriş: API)
+│   │   │   ├── useStocksQuotes.ts  → Canlı fiyat polling (60s)
+│   │   │   ├── usePredictions.ts   → Teknik tahmin polling (5dk)
 │   │   │   └── useVoiceAssistant.ts → Web Speech API (mikrofon + TTS)
 │   │   └── data/
-│   │       └── bistWatchlist.ts → BIST 30 hisse listesi
+│   │       └── bistWatchlist.ts → BIST hisse listesi
 │   ├── index.html
 │   ├── vite.config.ts        → Vite build ayarları
 │   └── tsconfig.json         → TypeScript ayarları
 │
 ├── ai/                       → Python sesli asistan backend
-│   ├── voice_assistant.py    → WebSocket sunucusu, Gemini AI entegrasyonu
-│   └── requirements.txt      → ai/ klasörüne yönlendirme (asıl dosya kökte)
+│   ├── voice_assistant.py    → WebSocket sunucusu, Gemini AI streaming
+│   └── requirements.txt      → Python bağımlılıkları
 │
 ├── .env                      → Ortam değişkenleri (git'e eklenmez!)
 ├── .env.example              → .env şablonu
@@ -121,12 +128,11 @@ Finto/
     │  Express Backend      │   │  Python AI Server  │
     │  (backend/server.ts)  │   │  (ai/voice_        │
     │                       │   │   assistant.py)    │
-    │  • /api/stocks/quotes │   │                   │
+    │  • /api/stocks/*      │   │                    │
     │    → Yahoo Finance    │   │  • WebSocket       │
-    │  • /api/stocks/predict│   │  • Gemini API      │
-    │    → predictionEngine │   │  • Streaming       │
-    │  • /api/auth/*        │   │    yanıtlar        │
-    │    → SQLite DB        │   └───────────────────┘
+    │  • /api/auth/*        │   │  • Gemini streaming│
+    │  • /api/portfolio/*   │   │                    │
+    │    → SQLite DB        │   └────────────────────┘
     └───────────────────────┘
 ```
 
@@ -137,8 +143,8 @@ Finto/
 ### Hisse Verileri
 | Method | Endpoint | Açıklama |
 |--------|----------|---------|
-| GET | `/api/stocks/quotes` | 30 BIST hissesinin canlı fiyatları |
-| POST | `/api/stocks/predict` | Teknik analiz tahminleri (SMA+RSI+Momentum) |
+| GET | `/api/stocks/quotes` | BIST listesi için canlı fiyatlar |
+| POST | `/api/stocks/predict` | Teknik analiz tahminleri (gruplanmış skor + ATR) |
 
 ### Kullanıcı Auth
 | Method | Endpoint | Açıklama |
@@ -147,6 +153,18 @@ Finto/
 | POST | `/api/auth/login` | Giriş yap (email, password) |
 | GET | `/api/auth/me` | Aktif oturumu kontrol et |
 | POST | `/api/auth/logout` | Çıkış yap |
+
+### Portföy (auth zorunlu, `requireAuth` middleware)
+| Method | Endpoint | Açıklama |
+|--------|----------|---------|
+| GET  | `/api/portfolio` | Tam snapshot (cash, holdings, transactions, registered, pinned) |
+| POST | `/api/portfolio/buy` | `{ symbol, quantity, price }` — atomic transaction |
+| POST | `/api/portfolio/sell` | `{ symbol, quantity, price }` |
+| POST | `/api/portfolio/deposit` | `{ amount }` |
+| POST | `/api/portfolio/withdraw` | `{ amount }` |
+| POST | `/api/portfolio/registered/toggle` | `{ symbol }` |
+| POST | `/api/portfolio/pinned/toggle` | `{ symbol }` |
+| POST | `/api/portfolio/import` | Anonim localStorage portföyünü server'a aktarır (sunucu boşsa) |
 
 ### AI Asistan
 | Protokol | Adres | Açıklama |
@@ -194,22 +212,36 @@ Email + şifre tabanlı, JWT cookie session:
 3. Her sayfa yüklemesinde `/api/auth/me` ile session kontrol edilir
 4. Çıkış yapılınca cookie temizlenir
 
-**Veritabanı:** `finto.db` (SQLite, otomatik oluşur)
+**Veritabanı:** `finto.db` (SQLite, WAL mode, otomatik oluşur)
+
+**JWT_SECRET kuralı:**
+- `NODE_ENV=production` ise `JWT_SECRET` zorunludur ve **en az 32 karakter** olmalı; aksi halde sunucu başlamaz.
+- Geliştirmede yoksa konsola uyarı verilir, geçici bir secret kullanılır.
+- Cookie `Secure` flag'i sadece production'da set edilir.
 
 ---
 
 ## Portföy Yönetimi
 
-Portföy verisi **tarayıcının localStorage**'ında saklanır — sunucu tarafında veritabanı yoktur.
+İki kipte çalışır:
+
+**1. Anonim ziyaretçi (giriş yapılmamış)**
+Portföy `localStorage`'da tutulur:
 
 | Anahtar | İçerik |
 |---------|--------|
 | `finto_cash` | Nakit bakiye (TL) |
-| `finto_holdings` | Hisse pozisyonları (JSON array) |
+| `finto_holdings` | Hisse pozisyonları (JSON) |
+| `finto_transactions` | Son 50 işlem |
+| `finto_registered_symbols` | Portföye kayıtlı semboller |
+| `finto_pinned_symbols` | Favoriler |
 | `finto_dark` | Dark mode tercihi |
-| `finto_voice_config` | Ses hızı, tonu, otomatik seslendir ayarları |
+| `finto_voice_config` | Ses hızı, tonu vb. |
 
-> **Not:** Tarayıcı geçmişi temizlenirse portföy sıfırlanır.
+**2. Giriş yapmış kullanıcı**
+SQLite tablolarına yazılır: `portfolios`, `holdings`, `transactions`, `preferences`. Alım/satım/transfer işlemleri **atomik SQLite transaction** içinde yürütülür (yetersiz bakiye, overflow vs. kontrolleri).
+
+**Geçiş davranışı:** Bir kullanıcı ilk kez giriş yaptığında, eğer localStorage'da portföyü varsa **ve** sunucudaki portföyü tamamen boşsa, lokal portföy `POST /api/portfolio/import` ile aktarılır ve localStorage temizlenir. Sonraki girişlerde server otoritedir.
 
 ---
 
@@ -272,31 +304,44 @@ pip install -r requirements.txt
 ```
 
 ### 3. `.env` dosyasını oluştur
-`.env.example` dosyasını kopyala ve değerleri doldur:
+
+PowerShell:
+```powershell
+Copy-Item .env.example .env
+```
+
+Bash / WSL:
 ```bash
 cp .env.example .env
 ```
 
-`.env` içeriği:
+`.env` içeriği (üretim için `JWT_SECRET` en az 32 karakter olmalı):
 ```env
 GEMINI_API_KEY="buraya_gemini_api_keyini_yaz"
-JWT_SECRET="buraya_guclu_bir_secret_yaz_ornek_finto2025xyz"
+JWT_SECRET="local-dev-secret-which-is-at-least-32-characters-long"
 APP_URL="http://localhost:3001"
 ```
 
-### 4. İki terminal açarak çalıştır
+### 4. Çalıştır
 
-**Terminal 1 — Web sunucusu (Express + React):**
+`npm run dev` tek komutla `concurrently` üzerinden Express + Vite + Python sesli asistanı paralel başlatır:
+
 ```bash
 npm run dev
 ```
-→ [http://localhost:3001](http://localhost:3001) adresinde açılır
 
-**Terminal 2 — Sesli asistan (Python):**
+→ Web: [http://localhost:3001](http://localhost:3001) · Sesli asistan: `ws://localhost:8001`
+
+Sadece web (`dev:web`) ya da sadece ses (`dev:voice`) script'leri de mevcut.
+
+### Üretim modunda çalıştırma
+
 ```bash
-python ai/voice_assistant.py
+npm run build
+npm start
 ```
-→ WebSocket sunucusu `ws://localhost:8001` adresinde başlar
+
+`npm start` `cross-env` ile `NODE_ENV=production` ayarlar (Windows + Linux uyumlu).
 
 ---
 
@@ -307,4 +352,4 @@ python ai/voice_assistant.py
 - **Web Speech API** sadece Chrome ve Edge'de çalışır
 - **Sesli asistan** için Python sunucusu (`python ai/voice_assistant.py`) ayrı terminalde çalışmalı
 - **SQLite** dosyası (`finto.db`) git'e eklenmez, ilk çalıştırmada otomatik oluşur
-- **Portföy verileri** tarayıcının `localStorage`'ında tutulur — tarayıcı geçmişi temizlenirse sıfırlanır
+- **Portföy verisi**: anonim ziyaretçi `localStorage`, giriş yapmış kullanıcı SQLite; ilk girişte otomatik import vardır

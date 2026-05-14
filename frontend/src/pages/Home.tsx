@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { useMemo, useRef, useState, useEffect } from 'react';
 import { TrendingUp, TrendingDown, Minus, ArrowRight, Pin, PinOff } from 'lucide-react';
 import type { TechnicalPrediction } from '../../../backend/predictionEngine.ts';
+import { useAnnouncer } from '../hooks/useAnnouncer.tsx';
 
 type MarketStock = {
   symbol: string;
@@ -18,8 +19,8 @@ type HomeProps = {
   lastUpdated: Date | null;
   registeredSymbols: string[];
   pinnedSymbols: string[];
-  onToggleRegisteredStock: (symbol: string) => { ok: boolean; message: string };
-  onTogglePinnedStock: (symbol: string) => { ok: boolean; message: string };
+  onToggleRegisteredStock: (symbol: string) => Promise<{ ok: boolean; message: string }>;
+  onTogglePinnedStock: (symbol: string) => Promise<{ ok: boolean; message: string }>;
 };
 
 const fmt = (n: number) =>
@@ -42,9 +43,12 @@ export default function Home({
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
   }, []);
 
+  const { announce } = useAnnouncer();
+
   function showFeedback(type: 'success' | 'error', text: string) {
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
     setFeedback({ type, text });
+    announce(text, type === 'error' ? 'assertive' : 'polite');
     feedbackTimer.current = setTimeout(() => setFeedback(null), 3200);
   }
 
@@ -103,7 +107,7 @@ export default function Home({
   }, [stocks, pinnedSymbols]);
 
   return (
-    <div className="p-4 md:p-6 flex flex-col gap-5" id="main-content">
+    <div className="p-4 md:p-6 flex flex-col gap-5" id="page-content" data-page="home">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <p className="text-xs font-black uppercase tracking-widest text-blue-700 dark:text-blue-300 mb-1">Piyasa Özeti</p>
@@ -151,8 +155,8 @@ export default function Home({
               <p className="text-blue-50 font-bold mt-2">{fmt(dayStock.price)} · %{dayStock.dailyChangePercent.toFixed(2)}</p>
             </div>
             <button
-              onClick={() => {
-                const result = onToggleRegisteredStock(dayStock.symbol);
+              onClick={async () => {
+                const result = await onToggleRegisteredStock(dayStock.symbol);
                 showFeedback(result.ok ? 'success' : 'error', result.message);
               }}
               className={`px-4 py-2 rounded-xl text-sm font-black transition-colors ${
@@ -195,13 +199,24 @@ export default function Home({
             const pinned = pinnedSymbols.includes(stock.symbol);
             return (
               <div key={stock.symbol} className="px-5 py-3.5 flex items-center justify-between gap-3 hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors">
-                <Link to={`/stock/${stock.symbol.toLowerCase()}`} className="min-w-0 flex-1">
-                  <p className="font-black text-sm text-slate-900 dark:text-white inline-flex items-center gap-1.5">
+                <Link
+                  to={`/stock/${stock.symbol.toLowerCase()}`}
+                  className="min-w-0 flex-1"
+                  aria-label={
+                    `${stock.name}, sembol ${stock.symbol}, fiyat ${fmt(stock.price)}, ` +
+                    `gün içi yüzde ${Math.abs(stock.dailyChangePercent).toFixed(2)} ` +
+                    `${up ? 'yükselişte' : 'düşüşte'}` +
+                    (pred ? `, teknik tahmin ${pred.trend === 'Yukselis' ? 'yükseliş' : pred.trend === 'Dusuk seyir' ? 'düşüş' : 'yatay'} skor ${pred.score}` : '') +
+                    (pinned ? ', favorilerde' : '') +
+                    '. Detay sayfasını aç.'
+                  }
+                >
+                  <p className="font-black text-sm text-slate-900 dark:text-white inline-flex items-center gap-1.5" aria-hidden="true">
                     {stock.symbol}
                     {pinned && <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">Favori</span>}
                   </p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 truncate">{stock.name}</p>
-                  <div className="flex items-center gap-2 mt-1">
+                  <p className="text-xs text-slate-500 dark:text-slate-400 truncate" aria-hidden="true">{stock.name}</p>
+                  <div className="flex items-center gap-2 mt-1" aria-hidden="true">
                     <span className="font-black text-slate-800 dark:text-slate-100 text-sm">{fmt(stock.price)}</span>
                     <span className={`text-xs font-black ${up ? 'text-green-600' : 'text-red-500'}`}>
                       {up ? '+' : ''}%{stock.dailyChangePercent.toFixed(2)}
@@ -210,7 +225,7 @@ export default function Home({
                       <span className={`text-[10px] font-black inline-flex items-center gap-1 ${
                         pred.trend === 'Yukselis' ? 'text-green-600' : pred.trend === 'Dusuk seyir' ? 'text-red-500' : 'text-slate-400'
                       }`}>
-                        <TrendIcon size={10} />
+                        <TrendIcon size={10} aria-hidden="true" />
                         {pred.score > 0 ? '+' : ''}{pred.score}
                       </span>
                     )}
@@ -218,8 +233,8 @@ export default function Home({
                 </Link>
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => {
-                      const result = onTogglePinnedStock(stock.symbol);
+                    onClick={async () => {
+                      const result = await onTogglePinnedStock(stock.symbol);
                       showFeedback(result.ok ? 'success' : 'error', result.message);
                     }}
                     className={`px-2.5 py-2 rounded-xl text-xs font-black border transition-colors inline-flex items-center gap-1 ${
@@ -227,15 +242,18 @@ export default function Home({
                         ? 'text-amber-600 border-amber-200 dark:border-amber-800 hover:bg-amber-50 dark:hover:bg-amber-900/25'
                         : 'text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
                     }`}
+                    aria-label={pinned ? `${stock.symbol} favorilerden çıkar` : `${stock.symbol} favorilere ekle`}
+                    aria-pressed={pinned}
                     title={pinned ? 'Favoriden çıkar' : 'Favorilere ekle'}
                   >
-                    {pinned ? <PinOff size={12} /> : <Pin size={12} />}
+                    {pinned ? <PinOff size={12} aria-hidden="true" /> : <Pin size={12} aria-hidden="true" />}
                   </button>
                   <button
-                    onClick={() => {
-                      const result = onToggleRegisteredStock(stock.symbol);
+                    onClick={async () => {
+                      const result = await onToggleRegisteredStock(stock.symbol);
                       showFeedback(result.ok ? 'success' : 'error', result.message);
                     }}
+                    aria-label={registered ? `${stock.symbol} kayıtlı hisselerden çıkar` : `${stock.symbol} kayıtlı hisselere ekle`}
                     className={`px-3 py-2 rounded-xl text-xs font-black border-2 transition-colors ${
                       registered
                         ? 'text-red-600 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/25'

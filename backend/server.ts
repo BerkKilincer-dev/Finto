@@ -6,6 +6,7 @@ import path from 'path';
 import { BIST_SYMBOLS } from '../frontend/src/data/bistWatchlist.ts';
 import { buildTechnicalPrediction, type OHLCV } from './predictionEngine.ts';
 import authRouter from './auth.ts';
+import portfolioRouter from './portfolio.ts';
 import { fetchYahooChart, mapInChunks } from './yahooClient.ts';
 
 type YahooChartMeta = {
@@ -57,6 +58,7 @@ async function startServer() {
   app.use(express.json());
   app.use(cookieParser());
   app.use('/api/auth', authRouter);
+  app.use('/api/portfolio', portfolioRouter);
 
   app.get('/api/stocks/quotes', async (_req, res) => {
     try {

@@ -1,6 +1,6 @@
 # Finto — Yapay Zeka Destekli BIST Finans Asistanı
 
-Finto, Borsa İstanbul (BIST) hisselerini gerçek zamanlı takip eden, teknik analiz tahminleri sunan ve sesli yapay zeka asistanı içeren bir finans platformudur.
+Finto, Borsa İstanbul (BIST) hisselerini gerçek zamanlı takip eden, teknik analiz tahminleri sunan ve sesli yapay zeka asistanı içeren bir finans simülasyon platformudur.
 
 ---
 
@@ -8,27 +8,45 @@ Finto, Borsa İstanbul (BIST) hisselerini gerçek zamanlı takip eden, teknik an
 
 ```
 Finto/
-├── backend/                  # Express API sunucusu
-│   ├── server.ts             # REST API endpoint'leri
-│   └── predictionEngine.ts   # Teknik analiz algoritması (SMA, RSI, Momentum)
-├── frontend/                 # React uygulaması
-│   ├── src/
-│   │   ├── App.tsx           # Global state ve veri yönetimi
-│   │   ├── pages/
-│   │   │   ├── Dashboard.tsx     # Portföy ve piyasa özeti
-│   │   │   └── StockDetail.tsx   # Hisse detay sayfası
-│   │   ├── components/
-│   │   │   └── GlobalAssistant.tsx  # Sesli asistan UI
-│   │   ├── hooks/
-│   │   │   └── useVoiceAssistant.ts # Web Speech API hook
-│   │   └── data/
-│   │       └── bistWatchlist.ts  # Takip edilen BIST hisseleri
-│   ├── index.html
-│   └── vite.config.ts
-├── ai/                       # Python sesli asistan sunucusu
-│   ├── voice_assistant.py    # WebSocket + Gemini AI
-│   └── requirements.txt
-├── .env                      # API anahtarları (git'e eklenmez)
+├── backend/                    # Node.js / Express API
+│   ├── server.ts               # REST endpoint'leri + Vite entegrasyonu
+│   ├── auth.ts                 # Kayıt / giriş / JWT cookie session
+│   ├── portfolio.ts            # Kullanıcı portföyü (DB-backed)
+│   ├── predictionEngine.ts     # Teknik analiz motoru (gruplanmış skor, ATR)
+│   ├── yahooClient.ts          # Yahoo Finance istek katmanı (timeout + retry)
+│   ├── thresholdDefaults.ts    # Trend eşiği (env ile override)
+│   └── db.ts                   # SQLite bağlantısı + şema
+│
+├── frontend/                   # React 19 SPA (Vite)
+│   └── src/
+│       ├── App.tsx             # Router + layout
+│       ├── main.tsx            # AuthProvider sarmalayıcı
+│       ├── pages/
+│       │   ├── Home.tsx
+│       │   ├── Dashboard.tsx   # Portföy ekranı
+│       │   ├── StockDetail.tsx
+│       │   └── Profile.tsx
+│       ├── components/
+│       │   ├── GlobalAssistant.tsx
+│       │   └── AuthModal.tsx
+│       ├── contexts/
+│       │   └── AuthContext.tsx
+│       ├── hooks/
+│       │   ├── usePortfolio.ts     # Anonim → localStorage, giriş → API
+│       │   ├── useStocksQuotes.ts  # Canlı fiyat polling
+│       │   ├── usePredictions.ts   # Teknik tahmin polling
+│       │   └── useVoiceAssistant.ts
+│       └── data/
+│           └── bistWatchlist.ts
+│
+├── ai/                         # Python sesli asistan (WebSocket)
+│   └── voice_assistant.py
+│
+├── scripts/
+│   └── backtest-thresholds.ts  # Walk-forward eşik kalibrasyonu
+│
+├── .env                        # API anahtarları (git'e eklenmez)
+├── finto.db                    # SQLite (otomatik oluşur)
 └── package.json
 ```
 
@@ -36,106 +54,142 @@ Finto/
 
 ## Veriler Nereden Geliyor?
 
-| Veri | Kaynak | Güncelleme Sıklığı |
-|------|--------|-------------------|
-| Hisse fiyatları | Yahoo Finance API | Her 60 saniyede bir |
-| Günlük % değişim | Yahoo Finance API | Her 60 saniyede bir |
-| Teknik tahminler | Kendi algoritması (SMA + RSI + Momentum) | Her 5 dakikada bir |
-| Portföy / Nakit | Tarayıcı localStorage | Anlık (alım/satımda) |
-| Sesli yanıtlar | Google Gemini AI | Her soruda |
+| Veri                  | Kaynak                                       | Güncelleme Sıklığı       |
+|-----------------------|----------------------------------------------|--------------------------|
+| Hisse fiyatları       | Yahoo Finance API                            | Her 60 saniyede bir      |
+| Günlük % değişim      | Yahoo Finance API                            | Her 60 saniyede bir      |
+| Teknik tahminler      | Kendi motoru (gruplanmış skor + ATR)         | Her 5 dakikada bir       |
+| Kullanıcı portföyü    | SQLite (giriş yapıldıysa) / localStorage     | Anlık                    |
+| Sesli yanıtlar        | Google Gemini AI (`gemini-2.0-flash`)        | Streaming                |
 
 > Yahoo Finance gecikmeli veri sağlar (~15 dakika). Gerçek zamanlı borsa verisi değildir.
 
 ---
 
+## Portföy Davranışı
+
+- **Anonim ziyaretçi**: portföy `localStorage`'da tutulur. Tarayıcı geçmişi temizlenirse sıfırlanır.
+- **Giriş yapmış kullanıcı**: portföy SQLite'da `portfolios` / `holdings` / `transactions` / `preferences` tablolarına yazılır. Başka cihazdan girişte aynı portföy gelir.
+- **İlk girişte**: localStorage'da veri varsa ve sunucudaki portföy boşsa, lokal portföy otomatik olarak sunucuya **import** edilir ve localStorage temizlenir.
+
+---
+
 ## Teknik Analiz Nasıl Çalışır?
 
-`backend/predictionEngine.ts` dosyası Yahoo Finance'den çekilen 3 aylık geçmiş kapanış fiyatlarını işler:
+`backend/predictionEngine.ts` Yahoo Finance'den çekilen 2 yıllık günlük OHLCV verisini işler:
 
-- **SMA** (5, 10, 20 günlük basit hareketli ortalama)
-- **RSI** (14 günlük göreceli güç endeksi)
-- **Momentum** (5 ve 20 günlük fiyat değişimi)
+- **Trend grubu** — SMA(5/10/20) konumu, MACD histogram, 5/20 günlük momentum
+- **Osilator grubu** — RSI(14), Bollinger %B
+- **Hacim teyidi** — Son 5 günün önceki 15 güne oranı
+- **Dinamik pencere** — Wilder ATR(14)% rejime göre 48–130 gün arası
+- **Hedef bandı** — `targetPrice ± 1 ATR` (tek nokta değil, belirsizlik bandı)
 
-Bu göstergeler -100 ile +100 arasında bir skor üretir:
+Trend etiketi `Yukselis` / `Yatay` / `Dusuk seyir`, skor `[-100, +100]` aralığında. `signalConsistencyPercent` modelin **doğruluğu değil**, oy pusulasının iç tutarlılığıdır.
 
-| Skor | Trend |
-|------|-------|
-| ≥ 22 | Yükseliş |
-| ≤ -22 | Düşüş |
-| -22 ile 22 arası | Yatay |
+Eşik (`trendThresholdUsed`) için isteğe bağlı walk-forward kalibrasyon:
 
-Hedef fiyat: `Mevcut Fiyat × (1 + Skor/100 × %3.5)`
+```bash
+npm run calibrate-thresholds
+```
 
 ---
 
 ## Kurulum ve Çalıştırma
 
 ### Gereksinimler
-- Node.js 18+
-- Python 3.11+
-- Google Gemini API anahtarı
 
-### 1. Bağımlılıkları Kur
+- **Node.js** 18+ — [nodejs.org](https://nodejs.org)
+- **Python** 3.11+ — [python.org](https://python.org) *(sadece sesli asistan için)*
+- **Google Gemini API key** — [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+- **Tarayıcı**: Chrome veya Edge (Web Speech API için)
+
+### 1. Bağımlılıkları kur
 
 ```bash
-# Node.js bağımlılıkları
 npm install
-
-# Python bağımlılıkları
 pip install -r requirements.txt
 ```
 
-### 2. Ortam Değişkenlerini Ayarla
-
-`.env` dosyasını oluştur:
+### 2. `.env` dosyası
 
 ```env
-GEMINI_API_KEY="senin_gemini_api_keyin"
+GEMINI_API_KEY="..."
+# Üretim için güçlü ve >= 32 karakter bir secret zorunludur.
+JWT_SECRET="local-dev-secret-which-is-at-least-32-characters-long"
+APP_URL="http://localhost:3001"
 ```
 
-Gemini API key almak için: [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+JWT secret 32 karakterden kısaysa **üretim modunda (`NODE_ENV=production`) sunucu başlamaz**; geliştirmede uyarı verir.
 
 ### 3. Çalıştır
 
-**Terminal 1 — Web Sunucusu (Express + React):**
+Tek komut hem Express/Vite hem Python sesli asistanı `concurrently` ile başlatır:
+
 ```bash
 npm run dev
 ```
-→ [http://localhost:3001](http://localhost:3001) adresinde açılır
 
-**Terminal 2 — Sesli Asistan (Python):**
+→ Web: <http://localhost:3001> · Sesli asistan: `ws://localhost:8001`
+
+Sadece web tarafını çalıştırmak istersen:
 ```bash
-python ai/voice_assistant.py
+npm run dev:web
 ```
-→ WebSocket sunucusu `ws://localhost:8001` adresinde başlar
+
+Sadece sesli asistan:
+```bash
+npm run dev:voice
+```
+
+### Üretim modu
+
+```bash
+npm run build
+npm start
+```
+
+`npm start` script'i `cross-env` ile `NODE_ENV=production` ayarlar, böylece Windows/Linux/macOS'ta tek komut çalışır. JWT cookie'leri otomatik olarak `Secure` flag'i alır.
 
 ---
 
-## Özellikler
+## API Endpoint'leri
 
-- **Canlı BIST Takibi** — 12 BIST 30 hissesinin anlık fiyat ve değişimlerini görüntüle
-- **Teknik Analiz** — SMA, RSI ve momentum bazlı otomatik tahmin motoru
-- **Portföy Yönetimi** — Hisse al, nakit çek, portföy değerini takip et
-- **Sesli AI Asistan** — Mikrofona konuş, Finto sayfa bağlamını okuyarak yanıt verir
-- **Erişilebilirlik** — Görme engelli kullanıcılar için sesli arayüz desteği
+### Hisse verileri (auth gerekmez)
+| Method | Path                    | Açıklama                          |
+|--------|-------------------------|-----------------------------------|
+| GET    | `/api/stocks/quotes`    | BIST listesi için canlı fiyatlar  |
+| POST   | `/api/stocks/predict`   | Teknik tahminler                  |
 
----
+### Auth
+| Method | Path                  | Açıklama               |
+|--------|-----------------------|------------------------|
+| POST   | `/api/auth/register`  | Yeni hesap             |
+| POST   | `/api/auth/login`     | Giriş                  |
+| GET    | `/api/auth/me`        | Aktif oturum           |
+| POST   | `/api/auth/logout`    | Çıkış                  |
 
-## Kullanılan Teknolojiler
+### Portföy (auth zorunlu)
+| Method | Path                                  | Açıklama                                  |
+|--------|---------------------------------------|-------------------------------------------|
+| GET    | `/api/portfolio`                      | Tam snapshot                              |
+| POST   | `/api/portfolio/buy`                  | `{ symbol, quantity, price }`             |
+| POST   | `/api/portfolio/sell`                 | `{ symbol, quantity, price }`             |
+| POST   | `/api/portfolio/deposit`              | `{ amount }`                              |
+| POST   | `/api/portfolio/withdraw`             | `{ amount }`                              |
+| POST   | `/api/portfolio/registered/toggle`    | `{ symbol }`                              |
+| POST   | `/api/portfolio/pinned/toggle`        | `{ symbol }`                              |
+| POST   | `/api/portfolio/import`               | Anonim localStorage portföyünü server'a aktarır (server boşsa) |
 
-| Katman | Teknoloji |
-|--------|-----------|
-| Frontend | React 19, TypeScript, Tailwind CSS, Vite |
-| Backend | Node.js, Express, TypeScript |
-| AI Asistan | Python, FastAPI (WebSocket), Google Gemini |
-| Veri | Yahoo Finance API (gecikmeli) |
-| Ses | Web Speech API (tarayıcı yerleşik) |
+### Sesli asistan
+| Protokol  | Adres                | Açıklama                |
+|-----------|----------------------|-------------------------|
+| WebSocket | `ws://localhost:8001` | Streaming Gemini yanıtı |
 
 ---
 
 ## Önemli Notlar
 
-- Portföy verileri tarayıcının `localStorage`'ında saklanır — sunucuda veritabanı yoktur
-- Tarayıcı geçmişini temizlersen portföy sıfırlanır
-- Teknik tahminler yatırım tavsiyesi değildir
-- Web Speech API yalnızca Chrome ve Edge tarayıcılarında çalışır
+- Yahoo Finance verisi gecikmelidir (~15 dk); yatırım tavsiyesi değildir.
+- Teknik tahminler kural tabanlıdır; **doğruluk garantisi yoktur**.
+- Web Speech API yalnızca Chrome ve Edge'de çalışır.
+- `finto.db` ilk çalıştırmada otomatik oluşur, git'e eklenmez.

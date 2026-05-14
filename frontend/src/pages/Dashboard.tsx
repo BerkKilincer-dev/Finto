@@ -2,6 +2,8 @@ import { Link } from 'react-router-dom';
 import { useEffect, useRef, useMemo, useState } from 'react';
 import type { TechnicalPrediction } from '../../../backend/predictionEngine.ts';
 import { Search, TrendingUp, TrendingDown, Minus, ArrowUpRight } from 'lucide-react';
+import { useAnnouncer } from '../hooks/useAnnouncer.tsx';
+import { APP_EVENTS } from '../hooks/appEvents';
 
 type MarketStock = {
   symbol: string;
@@ -32,10 +34,10 @@ type DashboardProps = {
   lastUpdated: Date | null;
   /** Yahoo / API erişilemediğinde kısa uyarı */
   marketDataWarning: string | null;
-  onBuyStock: (symbol: string, quantity: number) => { ok: boolean; message: string };
-  onSellStock: (symbol: string, quantity: number) => { ok: boolean; message: string };
-  onDepositCash: (amount: number) => { ok: boolean; message: string };
-  onWithdrawCash: (amount: number) => { ok: boolean; message: string };
+  onBuyStock: (symbol: string, quantity: number) => Promise<{ ok: boolean; message: string }>;
+  onSellStock: (symbol: string, quantity: number) => Promise<{ ok: boolean; message: string }>;
+  onDepositCash: (amount: number) => Promise<{ ok: boolean; message: string }>;
+  onWithdrawCash: (amount: number) => Promise<{ ok: boolean; message: string }>;
 };
 
 type SortMode = 'score' | 'change' | 'symbol' | 'name';
@@ -78,15 +80,35 @@ export default function Dashboard({
   const [confirmModal, setConfirmModal] = useState<ConfirmModal | null>(null);
   const [sellSymbol, setSellSymbol] = useState('');
   const [sellLotInput, setSellLotInput] = useState('1');
+  const [buyError, setBuyError] = useState<string | null>(null);
+  const [sellError, setSellError] = useState<string | null>(null);
+  const [depositError, setDepositError] = useState<string | null>(null);
+  const [withdrawError, setWithdrawError] = useState<string | null>(null);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const confirmDialogRef = useRef<HTMLDivElement | null>(null);
+  const confirmCancelButtonRef = useRef<HTMLButtonElement | null>(null);
+  const lastFocusedBeforeConfirmRef = useRef<HTMLElement | null>(null);
+  const buySymbolSelectRef = useRef<HTMLSelectElement | null>(null);
+  const sellSymbolSelectRef = useRef<HTMLSelectElement | null>(null);
+
+  const { announce } = useAnnouncer();
 
   function showFeedback(type: 'success' | 'error', text: string) {
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
     setFeedback({ type, text });
+    announce(text, type === 'error' ? 'assertive' : 'polite');
     feedbackTimer.current = setTimeout(() => setFeedback(null), 3500);
   }
 
   useEffect(() => () => { if (feedbackTimer.current) clearTimeout(feedbackTimer.current); }, []);
+
+  useEffect(() => {
+    function onLayerCloseTop() {
+      if (confirmModal) setConfirmModal(null);
+    }
+    window.addEventListener(APP_EVENTS.layerCloseTop, onLayerCloseTop);
+    return () => window.removeEventListener(APP_EVENTS.layerCloseTop, onLayerCloseTop);
+  }, [confirmModal]);
 
   useEffect(() => {
     if (!selectedSymbol && stocks[0]?.symbol) setSelectedSymbol(stocks[0].symbol);
@@ -135,66 +157,154 @@ export default function Dashboard({
   function handleBuySubmit(e: { preventDefault(): void }) {
     e.preventDefault();
     const quantity = Number.parseInt(lotInput, 10);
-    if (isNaN(quantity) || quantity <= 0) { showFeedback('error', 'Geçerli bir lot adedi girin.'); return; }
+    if (isNaN(quantity) || quantity <= 0) {
+      const message = 'Geçerli bir lot adedi girin.';
+      setBuyError(message);
+      showFeedback('error', message);
+      return;
+    }
+    setBuyError(null);
     const stock = stocks.find((s) => s.symbol === selectedSymbol);
     if (!stock) return;
+    lastFocusedBeforeConfirmRef.current = document.activeElement as HTMLElement | null;
     setConfirmModal({ type: 'buy', symbol: selectedSymbol, quantity, totalTL: stock.price * quantity });
+    announce(`${selectedSymbol} için alım onayı açıldı.`, 'polite');
   }
 
   function handleSellSubmit(e: { preventDefault(): void }) {
     e.preventDefault();
     const sym = sellSymbol || holdings[0]?.symbol;
     const quantity = Number.parseInt(sellLotInput, 10);
-    if (isNaN(quantity) || quantity <= 0) { showFeedback('error', 'Geçerli bir lot adedi girin.'); return; }
+    if (isNaN(quantity) || quantity <= 0) {
+      const message = 'Geçerli bir lot adedi girin.';
+      setSellError(message);
+      showFeedback('error', message);
+      return;
+    }
+    setSellError(null);
     const stock = allStocks.find((s) => s.symbol === sym);
     if (!stock) return;
+    lastFocusedBeforeConfirmRef.current = document.activeElement as HTMLElement | null;
     setConfirmModal({ type: 'sell', symbol: sym, quantity, totalTL: stock.price * quantity });
+    announce(`${sym} için satış onayı açıldı.`, 'polite');
   }
 
-  function handleConfirm() {
+  async function handleConfirm() {
     if (!confirmModal) return;
-    const result = confirmModal.type === 'buy'
+    const result = await (confirmModal.type === 'buy'
       ? onBuyStock(confirmModal.symbol, confirmModal.quantity)
-      : onSellStock(confirmModal.symbol, confirmModal.quantity);
+      : onSellStock(confirmModal.symbol, confirmModal.quantity));
     showFeedback(result.ok ? 'success' : 'error', result.message);
     setConfirmModal(null);
+    lastFocusedBeforeConfirmRef.current?.focus?.();
   }
 
-  function handleDepositSubmit(e: { preventDefault(): void }) {
+  async function handleDepositSubmit(e: { preventDefault(): void }) {
     e.preventDefault();
     const amount = Number(depositInput);
-    if (isNaN(amount) || amount <= 0) { showFeedback('error', 'Geçerli bir tutar girin.'); return; }
-    const result = onDepositCash(amount);
+    if (isNaN(amount) || amount <= 0) {
+      const message = 'Geçerli bir tutar girin.';
+      setDepositError(message);
+      showFeedback('error', message);
+      return;
+    }
+    setDepositError(null);
+    const result = await onDepositCash(amount);
     showFeedback(result.ok ? 'success' : 'error', result.message);
     if (result.ok) setDepositInput('');
   }
 
-  function handleWithdrawSubmit(e: { preventDefault(): void }) {
+  async function handleWithdrawSubmit(e: { preventDefault(): void }) {
     e.preventDefault();
     const amount = Number(withdrawInput);
-    if (isNaN(amount) || amount <= 0) { showFeedback('error', 'Geçerli bir tutar girin.'); return; }
-    const result = onWithdrawCash(amount);
+    if (isNaN(amount) || amount <= 0) {
+      const message = 'Geçerli bir tutar girin.';
+      setWithdrawError(message);
+      showFeedback('error', message);
+      return;
+    }
+    setWithdrawError(null);
+    const result = await onWithdrawCash(amount);
     showFeedback(result.ok ? 'success' : 'error', result.message);
     if (result.ok) setWithdrawInput('');
   }
+
+  useEffect(() => {
+    if (!confirmModal) return;
+    confirmCancelButtonRef.current?.focus();
+    const dialog = confirmDialogRef.current;
+    if (!dialog) return;
+    const focusables = dialog.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    );
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setConfirmModal(null);
+        lastFocusedBeforeConfirmRef.current?.focus?.();
+        return;
+      }
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        void handleConfirm();
+        return;
+      }
+      if (e.key !== 'Tab' || focusables.length === 0) return;
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last?.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first?.focus();
+      }
+    }
+    dialog.addEventListener('keydown', onKeyDown);
+    return () => dialog.removeEventListener('keydown', onKeyDown);
+  }, [confirmModal]);
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.altKey && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        buySymbolSelectRef.current?.focus();
+        announce('Hisse al bölümüne odaklandı.', 'polite');
+      }
+      if (e.altKey && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        sellSymbolSelectRef.current?.focus();
+        announce('Hisse sat bölümüne odaklandı.', 'polite');
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [announce]);
 
   const inputCls = 'w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white px-3 py-2.5 font-semibold text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-colors';
   const labelCls = 'text-[11px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2 block';
 
   return (
-    <div className="p-4 md:p-6 flex flex-col gap-5" id="main-content">
+    <div className="p-4 md:p-6 flex flex-col gap-5" id="page-content" data-page="portfolio">
 
       {/* Onay Modal */}
       {confirmModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm px-4">
-          <div className="ai-glass ai-neon-border rounded-3xl p-7 w-full max-w-sm shadow-2xl">
+          <div
+            ref={confirmDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label={confirmModal.type === 'buy' ? 'Alım onayı' : 'Satış onayı'}
+            aria-describedby="confirm-modal-desc"
+            className="ai-glass ai-neon-border rounded-3xl p-7 w-full max-w-sm shadow-2xl"
+          >
             <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-1">
               {confirmModal.type === 'buy' ? 'Alım Onayı' : 'Satış Onayı'}
             </p>
             <h3 className="text-2xl font-black text-slate-900 dark:text-white mb-4">
               {confirmModal.symbol}
             </h3>
-            <div className="bg-slate-50 dark:bg-slate-800 rounded-2xl p-4 mb-5 space-y-1">
+            <div id="confirm-modal-desc" className="bg-slate-50 dark:bg-slate-800 rounded-2xl p-4 mb-5 space-y-1">
               <div className="flex justify-between text-sm font-semibold text-slate-600 dark:text-slate-300">
                 <span>Miktar</span><span className="font-black text-slate-900 dark:text-white">{confirmModal.quantity} lot</span>
               </div>
@@ -206,7 +316,12 @@ export default function Dashboard({
               </div>
             </div>
             <div className="flex gap-3">
-              <button onClick={() => setConfirmModal(null)}
+              <button
+                ref={confirmCancelButtonRef}
+                onClick={() => {
+                  setConfirmModal(null);
+                  lastFocusedBeforeConfirmRef.current?.focus?.();
+                }}
                 className="flex-1 py-3 rounded-2xl font-black text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-sm">
                 İptal
               </button>
@@ -316,9 +431,11 @@ export default function Dashboard({
 
             <div className="px-5 py-3 border-b border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row gap-3">
               <div className="relative flex-1">
-                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <label htmlFor="stock-search" className="sr-only">Kayıtlı hisse ara</label>
+                <Search size={14} aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
-                  type="text"
+                  id="stock-search"
+                  type="search"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Kayıtlı hisse ara..."
@@ -348,13 +465,19 @@ export default function Dashboard({
                 const pred = predictions[stock.symbol];
                 const up = stock.dailyChangePercent >= 0;
                 const TrendIcon = pred?.trend === 'Yukselis' ? TrendingUp : pred?.trend === 'Dusuk seyir' ? TrendingDown : Minus;
+                const rowAria =
+                  `${stock.name}, sembol ${stock.symbol}, fiyat ${fmt(stock.price)}, ` +
+                  `gün içi yüzde ${Math.abs(stock.dailyChangePercent).toFixed(2)} ${up ? 'yükselişte' : 'düşüşte'}` +
+                  (pred ? `, teknik tahmin ${pred.trend === 'Yukselis' ? 'yükseliş' : pred.trend === 'Dusuk seyir' ? 'düşüş' : 'yatay'} skor ${pred.score}` : '') +
+                  '. Detay sayfasını aç.';
                 return (
                   <Link
                     key={stock.symbol}
                     to={`/stock/${stock.symbol.toLowerCase()}`}
+                    aria-label={rowAria}
                     className="flex items-center justify-between px-5 py-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors group"
                   >
-                    <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex items-center gap-3 min-w-0" aria-hidden="true">
                       <div className="w-9 h-9 rounded-xl bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center font-black text-[10px] text-blue-800 dark:text-blue-200 flex-shrink-0">
                         {stock.symbol.slice(0, 4)}
                       </div>
@@ -364,7 +487,7 @@ export default function Dashboard({
                           <span className="text-[10px] font-black text-slate-400 uppercase">{stock.symbol}</span>
                           {!predictLoading && pred && (
                             <span className={`flex items-center gap-0.5 text-[10px] font-black ${pred.trend === 'Yukselis' ? 'text-green-600' : pred.trend === 'Dusuk seyir' ? 'text-red-500' : 'text-slate-400'}`}>
-                              <TrendIcon size={10} />
+                              <TrendIcon size={10} aria-hidden="true" />
                               {pred.trend} {pred.score > 0 ? '+' : ''}{pred.score}
                             </span>
                           )}
@@ -372,13 +495,13 @@ export default function Dashboard({
                         </div>
                       </div>
                     </div>
-                    <div className="text-right flex-shrink-0 ml-4">
+                    <div className="text-right flex-shrink-0 ml-4" aria-hidden="true">
                       <p className="font-black text-sm text-slate-900 dark:text-white">{fmt(stock.price)}</p>
                       <p className={`text-xs font-black ${up ? 'text-green-600' : 'text-red-500'}`}>
                         {up ? '+' : ''}%{stock.dailyChangePercent.toFixed(2)}
                       </p>
                     </div>
-                    <ArrowUpRight size={14} className="ml-2 text-slate-300 group-hover:text-slate-600 dark:group-hover:text-slate-300 flex-shrink-0 transition-colors" />
+                    <ArrowUpRight size={14} aria-hidden="true" className="ml-2 text-slate-300 group-hover:text-slate-600 dark:group-hover:text-slate-300 flex-shrink-0 transition-colors" />
                   </Link>
                 );
               })}
@@ -390,15 +513,35 @@ export default function Dashboard({
         <div className="flex flex-col gap-4">
 
           {/* Hisse Al */}
-          <div className="ai-glass ai-neon-border rounded-2xl p-5">
-            <p className={labelCls}>Hisse Al</p>
-            <form className="space-y-2.5" onSubmit={handleBuySubmit}>
-              <select value={selectedSymbol} onChange={(e) => setSelectedSymbol(e.target.value)} className={inputCls}>
+          <section aria-labelledby="buy-section-title" className="ai-glass ai-neon-border rounded-2xl p-5">
+            <h2 id="buy-section-title" className={labelCls}>Hisse Al</h2>
+            <form className="space-y-2.5" onSubmit={handleBuySubmit} aria-describedby="buy-section-title">
+              <label htmlFor="buy-symbol" className="sr-only">Hisse seç</label>
+              <select
+                ref={buySymbolSelectRef}
+                id="buy-symbol"
+                value={selectedSymbol}
+                onChange={(e) => setSelectedSymbol(e.target.value)}
+                className={inputCls}
+              >
                 {stocks.map((s) => (
                   <option key={s.symbol} value={s.symbol}>{s.symbol} — {s.name}</option>
                 ))}
               </select>
-              <input type="number" min="1" step="1" value={lotInput} onChange={(e) => setLotInput(e.target.value)} placeholder="Lot adedi" className={inputCls} />
+              <label htmlFor="buy-lot" className="sr-only">Lot adedi</label>
+              <input
+                id="buy-lot"
+                type="number"
+                min="1"
+                step="1"
+                value={lotInput}
+                onChange={(e) => setLotInput(e.target.value)}
+                placeholder="Lot adedi"
+                className={inputCls}
+                aria-invalid={!!buyError}
+                aria-describedby={buyError ? 'buy-error' : undefined}
+              />
+              {buyError && <p id="buy-error" className="text-xs font-bold text-red-600 dark:text-red-400">{buyError}</p>}
               <button
                 disabled={stocks.length === 0}
                 className="w-full py-2.5 bg-blue-700 hover:bg-blue-800 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl font-black text-sm transition-colors"
@@ -409,47 +552,93 @@ export default function Dashboard({
             {stocks.length === 0 && (
               <p className="text-xs text-slate-400 font-semibold mt-2">Alım için önce ana sayfadan hisse kaydedin.</p>
             )}
-          </div>
+          </section>
 
           {/* Hisse Sat */}
           {holdings.length > 0 && (
-            <div className="ai-glass ai-neon-border rounded-2xl p-5">
-              <p className={labelCls}>Hisse Sat</p>
+            <section aria-labelledby="sell-section-title" className="ai-glass ai-neon-border rounded-2xl p-5">
+              <h2 id="sell-section-title" className={labelCls}>Hisse Sat</h2>
               <form className="space-y-2.5" onSubmit={handleSellSubmit}>
-                <select value={sellSymbol || holdings[0]?.symbol} onChange={(e) => setSellSymbol(e.target.value)} className={inputCls}>
+                <label htmlFor="sell-symbol" className="sr-only">Satılacak hisse</label>
+                <select
+                  ref={sellSymbolSelectRef}
+                  id="sell-symbol"
+                  value={sellSymbol || holdings[0]?.symbol}
+                  onChange={(e) => setSellSymbol(e.target.value)}
+                  className={inputCls}
+                >
                   {holdings.map((h) => (
                     <option key={h.symbol} value={h.symbol}>{h.symbol} — {h.quantity} lot</option>
                   ))}
                 </select>
-                <input type="number" min="1" step="1" value={sellLotInput} onChange={(e) => setSellLotInput(e.target.value)} placeholder="Lot adedi" className={inputCls} />
+                <label htmlFor="sell-lot" className="sr-only">Satılacak lot adedi</label>
+                <input
+                  id="sell-lot"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={sellLotInput}
+                  onChange={(e) => setSellLotInput(e.target.value)}
+                  placeholder="Lot adedi"
+                  className={inputCls}
+                  aria-invalid={!!sellError}
+                  aria-describedby={sellError ? 'sell-error' : undefined}
+                />
+                {sellError && <p id="sell-error" className="text-xs font-bold text-red-600 dark:text-red-400">{sellError}</p>}
                 <button className="w-full py-2.5 bg-red-500 hover:bg-red-600 text-white rounded-xl font-black text-sm transition-colors">
                   Sat
                 </button>
               </form>
-            </div>
+            </section>
           )}
 
           {/* Para Ekle */}
-          <div className="ai-glass ai-neon-border rounded-2xl p-5">
-            <p className={labelCls}>Ana Bakiyeye Para Ekle</p>
+          <section aria-labelledby="deposit-section-title" className="ai-glass ai-neon-border rounded-2xl p-5">
+            <h2 id="deposit-section-title" className={labelCls}>Ana Bakiyeye Para Ekle</h2>
             <form className="space-y-2.5" onSubmit={handleDepositSubmit}>
-              <input type="number" min="1" step="0.01" value={depositInput} onChange={(e) => setDepositInput(e.target.value)} placeholder="Tutar (TL)" className={inputCls} />
+              <label htmlFor="deposit-amount" className="sr-only">Eklenecek tutar (TL)</label>
+              <input
+                id="deposit-amount"
+                type="number"
+                min="1"
+                step="0.01"
+                value={depositInput}
+                onChange={(e) => setDepositInput(e.target.value)}
+                placeholder="Tutar (TL)"
+                className={inputCls}
+                aria-invalid={!!depositError}
+                aria-describedby={depositError ? 'deposit-error' : undefined}
+              />
+              {depositError && <p id="deposit-error" className="text-xs font-bold text-red-600 dark:text-red-400">{depositError}</p>}
               <button className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-sm transition-colors">
                 Para Ekle
               </button>
             </form>
-          </div>
+          </section>
 
           {/* Para Çek */}
-          <div className="ai-glass ai-neon-border rounded-2xl p-5">
-            <p className={labelCls}>Ana Bakiyeden Para Çek</p>
+          <section aria-labelledby="withdraw-section-title" className="ai-glass ai-neon-border rounded-2xl p-5">
+            <h2 id="withdraw-section-title" className={labelCls}>Ana Bakiyeden Para Çek</h2>
             <form className="space-y-2.5" onSubmit={handleWithdrawSubmit}>
-              <input type="number" min="1" step="0.01" value={withdrawInput} onChange={(e) => setWithdrawInput(e.target.value)} placeholder="Tutar (TL)" className={inputCls} />
+              <label htmlFor="withdraw-amount" className="sr-only">Çekilecek tutar (TL)</label>
+              <input
+                id="withdraw-amount"
+                type="number"
+                min="1"
+                step="0.01"
+                value={withdrawInput}
+                onChange={(e) => setWithdrawInput(e.target.value)}
+                placeholder="Tutar (TL)"
+                className={inputCls}
+                aria-invalid={!!withdrawError}
+                aria-describedby={withdrawError ? 'withdraw-error' : undefined}
+              />
+              {withdrawError && <p id="withdraw-error" className="text-xs font-bold text-red-600 dark:text-red-400">{withdrawError}</p>}
               <button className="w-full py-2.5 bg-slate-800 dark:bg-slate-600 hover:bg-slate-700 text-white rounded-xl font-black text-sm transition-colors">
                 Para Çek
               </button>
             </form>
-          </div>
+          </section>
 
           {/* AI Asistan kartı */}
           <div className="bg-blue-800 rounded-2xl p-5 text-white">

@@ -9,6 +9,9 @@ from google.genai import types
 
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
+# Model env ile override edilebilir; varsayılan 2.5-flash (kaliteli + free tier'ı geniş).
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
 GREETING = (
     "Merhaba! Ben Finto, yapay zeka finans asistanınım. "
     "Size BIST hisselerini analiz etme, portföyünüzü takip etme, "
@@ -76,23 +79,38 @@ async def handle(ws: ServerConnection):
                 f"- Sayfadaki Aktif Veri: {page_context or 'Veri Yok'}"
             )
 
+            sent_any_chunk = False
             try:
-                loop = asyncio.get_event_loop()
-                chunks = await loop.run_in_executor(
-                    None,
-                    lambda: list(client.models.generate_content_stream(
-                        model="gemini-2.0-flash",
+                loop = asyncio.get_running_loop()
+
+                def open_stream():
+                    return client.models.generate_content_stream(
+                        model=GEMINI_MODEL,
                         contents=query,
                         config=types.GenerateContentConfig(
                             system_instruction=system_with_context,
                             temperature=0.7,
                         ),
-                    ))
-                )
+                    )
 
-                for chunk in chunks:
-                    if chunk.text:
-                        await ws.send(json.dumps({"type": "chunk", "text": chunk.text}, ensure_ascii=False))
+                stream = await loop.run_in_executor(None, open_stream)
+                stream_iter = iter(stream)
+                SENTINEL = object()
+
+                def next_chunk():
+                    try:
+                        return next(stream_iter)
+                    except StopIteration:
+                        return SENTINEL
+
+                while True:
+                    chunk = await loop.run_in_executor(None, next_chunk)
+                    if chunk is SENTINEL:
+                        break
+                    text = getattr(chunk, "text", None)
+                    if text:
+                        sent_any_chunk = True
+                        await ws.send(json.dumps({"type": "chunk", "text": text}, ensure_ascii=False))
 
                 await ws.send(json.dumps({"type": "done"}, ensure_ascii=False))
 
@@ -106,7 +124,14 @@ async def handle(ws: ServerConnection):
                 elif "403" in err or "PERMISSION_DENIED" in err:
                     user_msg = "Gemini API erisim izni reddedildi. API anahtarini ve proje izinlerini kontrol edin."
                 else:
-                    user_msg = err[:200]
+                    user_msg = err[:200] or "Beklenmeyen bir hata olustu."
+                # Eğer akış başlamışsa önce done gönder ki frontend "düşünüyor" stuck kalmasın,
+                # sonra error gönder; frontend hata mesajını ek bir baloncuk olarak gösterir.
+                if sent_any_chunk:
+                    try:
+                        await ws.send(json.dumps({"type": "done"}, ensure_ascii=False))
+                    except Exception:
+                        pass
                 await ws.send(json.dumps({"type": "error", "message": user_msg}, ensure_ascii=False))
 
     except Exception as e:
@@ -116,13 +141,15 @@ async def handle(ws: ServerConnection):
 
 async def main():
     port = int(os.getenv("VOICE_PORT", "8001"))
-    print(f"Finto Voice Assistant (Gemini) — ws://0.0.0.0:{port}")
+    print(f"Finto Voice Assistant (Gemini, model={GEMINI_MODEL}) — ws://0.0.0.0:{port}")
     async with serve(
         handle,
         "0.0.0.0",
         port,
         origins=None,
-        ping_interval=None,
+        # 30 saniyede bir ping; 60 saniyede pong gelmezse bağlantı düşür.
+        ping_interval=30,
+        ping_timeout=60,
     ):
         await asyncio.Future()
 

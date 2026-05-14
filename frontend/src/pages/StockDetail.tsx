@@ -49,7 +49,7 @@ export default function StockDetail({ stocks, predictions, predictLoading, predi
   }, [predictUpdatedAt]);
 
   return (
-    <div className="p-4 md:p-6 flex flex-col gap-5" id="main-content">
+    <div className="p-4 md:p-6 flex flex-col gap-5" id="page-content" data-page="stock-detail">
 
       {/* Geri + başlık */}
       <div className="flex items-start gap-3">

@@ -1,114 +1,308 @@
-import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
-import GlobalAssistant from './components/GlobalAssistant';
+import { BrowserRouter as Router, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
+import GlobalAssistant, { type VoiceCommandHandler } from './components/GlobalAssistant';
+import CommandPalette from './components/CommandPalette';
 import Home from './pages/Home';
 import Dashboard from './pages/Dashboard';
 import StockDetail from './pages/StockDetail';
 import Profile from './pages/Profile';
 import AuthModal from './components/AuthModal';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { BIST_SYMBOLS, BIST_WATCHLIST } from './data/bistWatchlist';
-import type { TechnicalPrediction } from '../../backend/predictionEngine.ts';
-import { Moon, Sun, User, LogIn } from 'lucide-react';
+import { Moon, Sun, User, LogIn, Volume2, Command } from 'lucide-react';
 import { useAuth } from './contexts/AuthContext.tsx';
+import { useStocksQuotes } from './hooks/useStocksQuotes';
+import { usePredictions } from './hooks/usePredictions';
+import { usePortfolio, type PortfolioApi } from './hooks/usePortfolio';
+import { useAnnouncer } from './hooks/useAnnouncer.tsx';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { parseVoiceCommand } from './hooks/voiceCommands';
+import { BIST_SYMBOLS } from './data/bistWatchlist';
+import type { MarketStock } from './hooks/useStocksQuotes';
+import {
+  COMMAND_ITEMS,
+  DEFAULT_SHORTCUTS,
+  formatShortcut,
+  getGlobalHint,
+  type CommandItem,
+} from './hooks/accessibilityConfig';
+import { useAccessibilitySettings } from './hooks/useAccessibilitySettings.tsx';
+import { APP_EVENTS } from './hooks/appEvents';
 
-type MarketStock = {
-  symbol: string;
-  name: string;
-  price: number;
-  dailyChangePercent: number;
-  marketTag: string;
-  marketCap?: number;
-  source?: string;
+const ROUTE_TITLES: Record<string, string> = {
+  '/': 'Ana sayfa',
+  '/portfolio': 'Portföyüm',
+  '/profile': 'Profilim',
 };
 
-type Holding = {
-  symbol: string;
-  quantity: number;
-  averageCost: number;
-};
+function fmtTry(n: number): string {
+  return n.toLocaleString('tr-TR', { style: 'currency', currency: 'TRY', maximumFractionDigits: 2 });
+}
 
-type TransactionType = 'buy' | 'sell' | 'deposit' | 'withdraw';
+/**
+ * Asistana sayfa içeriğini sesli okutmak için detaylı metin üretir.
+ * Portföy sayfasında özetler, ana sayfada öneri verir vs.
+ */
+function buildPageSpeech(
+  pathname: string,
+  portfolio: PortfolioApi,
+  stocks: MarketStock[],
+  conciseMode: boolean,
+): string {
+  if (pathname === '/portfolio' || pathname === '/profile') {
+    const lines = [
+      `Toplam varlığınız ${fmtTry(portfolio.totalBalance)}.`,
+      `Nakit bakiyeniz ${fmtTry(portfolio.cashBalance)}.`,
+    ];
+    if (portfolio.holdings.length === 0) {
+      lines.push('Henüz hisse pozisyonunuz yok.');
+    } else {
+      const top = [...portfolio.holdings]
+        .map((h) => {
+          const stock = stocks.find((s) => s.symbol === h.symbol);
+          const value = stock ? stock.price * h.quantity : 0;
+          return { ...h, value, name: stock?.name ?? h.symbol };
+        })
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 3);
+      const topText =
+        `Toplam ${portfolio.holdings.length} hissede pozisyon var. En büyükleri: ` +
+        top
+          .map((h) =>
+            conciseMode
+              ? `${h.name} ${h.quantity} lot, ${fmtTry(h.value)}`
+              : `${h.name} ${h.quantity} lot, değeri ${fmtTry(h.value)}, ortalama maliyet ${fmtTry(h.averageCost)}`,
+          )
+          .join('; ') +
+        '.';
+      lines.push(topText);
+    }
+    return lines.join(' ');
+  }
+  if (pathname.startsWith('/stock/')) {
+    const sym = pathname.split('/')[2]?.toUpperCase();
+    const stock = stocks.find((s) => s.symbol === sym);
+    if (stock) {
+      const dir = stock.dailyChangePercent >= 0 ? 'yükselişte' : 'düşüşte';
+      if (conciseMode) {
+        return `${stock.symbol}, ${fmtTry(stock.price)}, günlük yüzde ${stock.dailyChangePercent.toFixed(2)}.`;
+      }
+      return `${stock.name}, sembol ${stock.symbol}, fiyat ${fmtTry(stock.price)}, gün içi yüzde ${Math.abs(stock.dailyChangePercent).toFixed(2)} ${dir}.`;
+    }
+  }
+  // Ana sayfa / fallback: id="page-content" altındaki metni oku
+  const el = document.getElementById('page-content');
+  return el ? el.innerText.slice(0, conciseMode ? 320 : 600) : 'Bu sayfada sesli olarak okunacak ek bilgi yok.';
+}
 
-type Transaction = {
-  id: string;
-  type: TransactionType;
-  amount: number;
-  createdAt: string;
-  symbol?: string;
-  quantity?: number;
-};
-
-const INITIAL_BIST_STOCKS: MarketStock[] = BIST_WATCHLIST.map((s) => ({ ...s }));
+function buildPortfolioSpeech(portfolio: PortfolioApi, stocks: MarketStock[], conciseMode: boolean): string {
+  const lines = [
+    `Toplam varlığınız ${fmtTry(portfolio.totalBalance)}, nakit ${fmtTry(portfolio.cashBalance)}, hisse değeri ${fmtTry(
+      portfolio.holdingsValue,
+    )}.`,
+  ];
+  if (portfolio.holdings.length === 0) {
+    lines.push('Hiç hisse pozisyonunuz yok.');
+  } else {
+    const detail = portfolio.holdings
+      .map((h) => {
+        const stock = stocks.find((s) => s.symbol === h.symbol);
+        const value = stock ? stock.price * h.quantity : h.quantity * h.averageCost;
+        if (conciseMode) {
+          return `${stock?.symbol ?? h.symbol} ${h.quantity} lot, ${fmtTry(value)}`;
+        }
+        const pnl = stock ? (stock.price - h.averageCost) * h.quantity : 0;
+        const pnlTxt = pnl >= 0 ? `${fmtTry(pnl)} karda` : `${fmtTry(Math.abs(pnl))} zararda`;
+        return `${stock?.name ?? h.symbol} ${h.quantity} lot, değer ${fmtTry(value)}, ${pnlTxt}`;
+      })
+      .join('. ');
+    lines.push(detail + '.');
+  }
+  return lines.join(' ');
+}
 
 export default function App() {
-  const [stocks, setStocks] = useState<MarketStock[]>(INITIAL_BIST_STOCKS);
-  const [predictions, setPredictions] = useState<Record<string, TechnicalPrediction>>({});
-  const [predictLoading, setPredictLoading] = useState(true);
-  const [predictUpdatedAt, setPredictUpdatedAt] = useState<Date | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [marketDataWarning, setMarketDataWarning] = useState<string | null>(null);
+  return (
+    <Router>
+      <AppShell />
+    </Router>
+  );
+}
+
+function AppShell() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { announce } = useAnnouncer();
+  const {
+    conciseMode,
+    shortcuts,
+    onboardingSeen,
+    setOnboardingSeen,
+    setConciseMode,
+    setShortcut,
+    resetShortcuts,
+  } = useAccessibilitySettings();
+  const { stocks, lastUpdated, marketDataWarning } = useStocksQuotes();
+  const { predictions, predictLoading, predictUpdatedAt, loadPredictions } = usePredictions();
+  const portfolio = usePortfolio(stocks);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+
+  // Sayfa değiştiğinde başlığı duyur ve main'e odaklan (screen reader navigasyonu için).
+  useEffect(() => {
+    let title: string | null = ROUTE_TITLES[location.pathname] ?? null;
+    if (!title && location.pathname.startsWith('/stock/')) {
+      const sym = location.pathname.split('/')[2]?.toUpperCase();
+      const stock = stocks.find((s) => s.symbol === sym);
+      title = stock ? `${stock.name} (${stock.symbol}) hisse detayı` : `${sym} hisse detayı`;
+    }
+    if (!title) title = 'Finto';
+    document.title = `${title} · Finto`;
+    announce(`${title} sayfası açıldı`);
+    // Odağı main'e taşı — ekran okuyucu yeni içerikten okumaya başlar.
+    const main = document.getElementById('main-content');
+    if (main) (main as HTMLElement).focus({ preventScroll: false });
+  }, [location.pathname, announce, stocks]);
+
+  useEffect(() => {
+    if (marketDataWarning) announce(marketDataWarning, 'assertive');
+  }, [marketDataWarning, announce]);
+
+  useEffect(() => {
+    if (onboardingSeen) return;
+    const hint = getGlobalHint(shortcuts);
+    announce(`Erişilebilirlik turu başladı. ${hint}`, 'polite');
+    window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantSpeak, { detail: { text: hint } }));
+    setOnboardingSeen(true);
+  }, [onboardingSeen, shortcuts, announce, setOnboardingSeen]);
+
+  useEffect(() => {
+    function onRestart() {
+      setOnboardingSeen(false);
+    }
+    window.addEventListener(APP_EVENTS.onboardingRestart, onRestart);
+    return () => window.removeEventListener(APP_EVENTS.onboardingRestart, onRestart);
+  }, [setOnboardingSeen]);
+
+  const [showAuthModal, setShowAuthModal] = useState(false);
+
+  const closeTopLayer = useCallback(() => {
+    if (isCommandPaletteOpen) {
+      setIsCommandPaletteOpen(false);
+      return;
+    }
+    if (showAuthModal) {
+      setShowAuthModal(false);
+      return;
+    }
+    window.dispatchEvent(new CustomEvent(APP_EVENTS.layerCloseTop));
+    window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantClose));
+  }, [isCommandPaletteOpen, showAuthModal]);
+
+  const handleReadPage = useCallback(() => {
+    const text = buildPageSpeech(location.pathname, portfolio, stocks, conciseMode);
+    window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantSpeak, { detail: { text } }));
+  }, [location.pathname, portfolio, stocks, conciseMode]);
+
+  const runCommand = useCallback(
+    (commandId: CommandItem['id']) => {
+      if (commandId === 'toggle-assistant') {
+        window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantToggle));
+        return;
+      }
+      if (commandId === 'start-listening') {
+        window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantListen));
+        return;
+      }
+      if (commandId === 'read-page') {
+        handleReadPage();
+        return;
+      }
+      if (commandId === 'go-home') {
+        navigate('/');
+        return;
+      }
+      if (commandId === 'go-portfolio') {
+        navigate('/portfolio');
+        return;
+      }
+      if (commandId === 'go-profile') {
+        navigate('/profile');
+        return;
+      }
+      if (commandId === 'close-layer') {
+        closeTopLayer();
+        return;
+      }
+      if (commandId === 'shortcut-help') {
+        const text = getGlobalHint(shortcuts);
+        announce(text, 'polite');
+        window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantSpeak, { detail: { text } }));
+      }
+    },
+    [announce, closeTopLayer, handleReadPage, navigate, shortcuts],
+  );
+
+  // Sesli komut → yerel intent
+  const handleVoiceCommand = useCallback<VoiceCommandHandler>(
+    async (text) => {
+      const intent = parseVoiceCommand(text, BIST_SYMBOLS);
+      if (!intent) return { handled: false };
+
+      if (intent.type === 'help') {
+        return { handled: true, reply: getGlobalHint(shortcuts) };
+      }
+      if (intent.type === 'close-assistant') {
+        window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantClose));
+        return { handled: true, reply: 'Tamam, kapatıyorum.' };
+      }
+      if (intent.type === 'navigate') {
+        if (intent.to === 'stock' && intent.symbol) {
+          navigate(`/stock/${intent.symbol.toLowerCase()}`);
+          return { handled: true, reply: `${intent.symbol} detay sayfasını açıyorum.` };
+        }
+        if (intent.to !== 'stock') {
+          navigate(intent.to);
+          const name = ROUTE_TITLES[intent.to] ?? 'sayfa';
+          return { handled: true, reply: `${name} açılıyor.` };
+        }
+      }
+      if (intent.type === 'read') {
+        if (intent.what === 'portfolio' || intent.what === 'holdings') {
+          return { handled: true, reply: buildPortfolioSpeech(portfolio, stocks, conciseMode) };
+        }
+        if (intent.what === 'cash') {
+          return { handled: true, reply: `Nakit bakiyeniz ${fmtTry(portfolio.cashBalance)}.` };
+        }
+        if (intent.what === 'page') {
+          return { handled: true, reply: buildPageSpeech(location.pathname, portfolio, stocks, conciseMode) };
+        }
+      }
+      if (intent.type === 'buy') {
+        const res = await portfolio.buyStock(intent.symbol, intent.quantity);
+        return { handled: true, reply: res.message };
+      }
+      if (intent.type === 'sell') {
+        const res = await portfolio.sellStock(intent.symbol, intent.quantity);
+        return { handled: true, reply: res.message };
+      }
+      return { handled: false };
+    },
+    [navigate, portfolio, stocks, location.pathname, conciseMode, shortcuts],
+  );
+
+  // Klavye kısayolları
+  useKeyboardShortcuts(
+    {
+      onToggleAssistant: () => window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantToggle)),
+      onStartListening: () => window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantListen)),
+      onCloseTopLayer: closeTopLayer,
+      onOpenCommandPalette: () => setIsCommandPaletteOpen(true),
+      onReadPage: handleReadPage,
+    },
+    shortcuts,
+    announce,
+  );
+
   const [darkMode, setDarkMode] = useState<boolean>(() => {
     return localStorage.getItem('finto_dark') === 'true';
-  });
-  const [cashBalance, setCashBalance] = useState<number>(() => {
-    const saved = localStorage.getItem('finto_cash');
-    return saved !== null ? Number(saved) : 30000;
-  });
-  const [holdings, setHoldings] = useState<Holding[]>(() => {
-    try {
-      const saved = localStorage.getItem('finto_holdings');
-      return saved ? (JSON.parse(saved) as Holding[]) : [];
-    } catch {
-      return [];
-    }
-  });
-  const [registeredSymbols, setRegisteredSymbols] = useState<string[]>(() => {
-    try {
-      const saved = localStorage.getItem('finto_registered_symbols');
-      if (saved) {
-        const parsed = JSON.parse(saved) as unknown;
-        if (Array.isArray(parsed)) {
-          return parsed.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
-        }
-      }
-    } catch {
-      // noop
-    }
-    return [];
-  });
-  const [transactions, setTransactions] = useState<Transaction[]>(() => {
-    try {
-      const saved = localStorage.getItem('finto_transactions');
-      if (saved) {
-        const parsed = JSON.parse(saved) as unknown;
-        if (Array.isArray(parsed)) {
-          return parsed.filter((item): item is Transaction => {
-            if (!item || typeof item !== 'object') return false;
-            const rec = item as Record<string, unknown>;
-            return (
-              typeof rec.id === 'string' &&
-              typeof rec.type === 'string' &&
-              typeof rec.amount === 'number' &&
-              typeof rec.createdAt === 'string'
-            );
-          });
-        }
-      }
-    } catch {
-      // noop
-    }
-    return [];
-  });
-  const [pinnedSymbols, setPinnedSymbols] = useState<string[]>(() => {
-    try {
-      const saved = localStorage.getItem('finto_pinned_symbols');
-      if (!saved) return [];
-      const parsed = JSON.parse(saved) as unknown;
-      if (!Array.isArray(parsed)) return [];
-      return parsed.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
-    } catch {
-      return [];
-    }
   });
 
   useEffect(() => {
@@ -120,230 +314,32 @@ export default function App() {
     localStorage.setItem('finto_dark', String(darkMode));
   }, [darkMode]);
 
-  useEffect(() => {
-    localStorage.setItem('finto_cash', String(cashBalance));
-  }, [cashBalance]);
-
-  useEffect(() => {
-    localStorage.setItem('finto_holdings', JSON.stringify(holdings));
-  }, [holdings]);
-
-  useEffect(() => {
-    setRegisteredSymbols((prev) => {
-      const symbols = new Set(prev);
-      holdings.forEach((holding) => symbols.add(holding.symbol));
-      return Array.from(symbols);
-    });
-  }, [holdings]);
-
-  useEffect(() => {
-    localStorage.setItem('finto_registered_symbols', JSON.stringify(registeredSymbols));
-  }, [registeredSymbols]);
-
-  useEffect(() => {
-    localStorage.setItem('finto_transactions', JSON.stringify(transactions));
-  }, [transactions]);
-
-  useEffect(() => {
-    localStorage.setItem('finto_pinned_symbols', JSON.stringify(pinnedSymbols));
-  }, [pinnedSymbols]);
-
-  const holdingsValue = useMemo(() => {
-    return holdings.reduce((total, holding) => {
-      const stock = stocks.find((item) => item.symbol === holding.symbol);
-      if (!stock) return total;
-      return total + holding.quantity * stock.price;
-    }, 0);
-  }, [holdings, stocks]);
-
   const registeredStocks = useMemo(
-    () => stocks.filter((stock) => registeredSymbols.includes(stock.symbol)),
-    [registeredSymbols, stocks]
+    () => stocks.filter((stock) => portfolio.registeredSymbols.includes(stock.symbol)),
+    [portfolio.registeredSymbols, stocks],
   );
 
   const tickerItems = useMemo(
     () =>
       stocks.map((stock) => ({
         symbol: stock.symbol,
-        priceText: stock.price.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+        priceText: stock.price.toLocaleString('tr-TR', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        }),
         pct: stock.dailyChangePercent,
       })),
-    [stocks]
+    [stocks],
   );
 
-  const totalBalance = cashBalance + holdingsValue;
-
-  function addTransaction(entry: Omit<Transaction, 'id' | 'createdAt'>) {
-    setTransactions((prev) => [
-      {
-        id: crypto.randomUUID(),
-        createdAt: new Date().toISOString(),
-        ...entry,
-      },
-      ...prev.slice(0, 49),
-    ]);
-  }
-
-  function buyStock(symbol: string, quantity: number): { ok: boolean; message: string } {
-    const stock = stocks.find((item) => item.symbol === symbol);
-    if (!stock) return { ok: false, message: 'Hisse bulunamadı.' };
-    if (!registeredSymbols.includes(symbol)) return { ok: false, message: 'Önce hisseyi kayıtlı hisselere ekleyin.' };
-    if (!Number.isFinite(quantity) || quantity <= 0) return { ok: false, message: 'Lot adedi 1 veya daha büyük olmalı.' };
-
-    const cost = stock.price * quantity;
-    if (cost > cashBalance) return { ok: false, message: 'Yetersiz nakit bakiye.' };
-
-    setCashBalance((prev) => prev - cost);
-    setHoldings((prev) => {
-      const existing = prev.find((item) => item.symbol === symbol);
-      if (!existing) return [...prev, { symbol, quantity, averageCost: stock.price }];
-      const newQty = existing.quantity + quantity;
-      const weightedAvg = (existing.averageCost * existing.quantity + cost) / newQty;
-      return prev.map((item) => item.symbol === symbol ? { ...item, quantity: newQty, averageCost: weightedAvg } : item);
-    });
-    addTransaction({ type: 'buy', amount: cost, symbol, quantity });
-    return { ok: true, message: `${symbol} için ${quantity} lot alım gerçekleşti.` };
-  }
-
-  function sellStock(symbol: string, quantity: number): { ok: boolean; message: string } {
-    const stock = stocks.find((item) => item.symbol === symbol);
-    if (!stock) return { ok: false, message: 'Hisse bulunamadı.' };
-    const holding = holdings.find((item) => item.symbol === symbol);
-    if (!holding) return { ok: false, message: 'Bu hissede pozisyon bulunmuyor.' };
-    if (!Number.isFinite(quantity) || quantity <= 0) return { ok: false, message: 'Lot adedi 1 veya daha büyük olmalı.' };
-    if (quantity > holding.quantity) return { ok: false, message: `En fazla ${holding.quantity} lot satabilirsiniz.` };
-
-    const proceeds = stock.price * quantity;
-    setCashBalance((prev) => prev + proceeds);
-    setHoldings((prev) => {
-      const newQty = holding.quantity - quantity;
-      if (newQty === 0) return prev.filter((item) => item.symbol !== symbol);
-      return prev.map((item) => item.symbol === symbol ? { ...item, quantity: newQty } : item);
-    });
-    addTransaction({ type: 'sell', amount: proceeds, symbol, quantity });
-    return { ok: true, message: `${symbol} için ${quantity} lot satış gerçekleşti. +${proceeds.toLocaleString('tr-TR', { style: 'currency', currency: 'TRY', maximumFractionDigits: 2 })}` };
-  }
-
-  function withdrawCash(amount: number): { ok: boolean; message: string } {
-    if (!Number.isFinite(amount) || amount <= 0) return { ok: false, message: 'Çekilecek tutar 0\'dan büyük olmalı.' };
-    if (amount > cashBalance) return { ok: false, message: 'Yetersiz nakit bakiye.' };
-    setCashBalance((prev) => prev - amount);
-    addTransaction({ type: 'withdraw', amount });
-    return { ok: true, message: `${amount.toLocaleString('tr-TR')} TL çekim yapıldı.` };
-  }
-
-  function depositCash(amount: number): { ok: boolean; message: string } {
-    if (!Number.isFinite(amount) || amount <= 0) return { ok: false, message: 'Yüklenecek tutar 0\'dan büyük olmalı.' };
-    setCashBalance((prev) => prev + amount);
-    addTransaction({ type: 'deposit', amount });
-    return { ok: true, message: `${amount.toLocaleString('tr-TR')} TL bakiye eklendi.` };
-  }
-
-  function toggleRegisteredStock(symbol: string): { ok: boolean; message: string } {
-    const exists = stocks.some((item) => item.symbol === symbol);
-    if (!exists) return { ok: false, message: 'Hisse bulunamadı.' };
-
-    const hasHolding = holdings.some((holding) => holding.symbol === symbol);
-    const isRegistered = registeredSymbols.includes(symbol);
-    if (isRegistered && hasHolding) {
-      return { ok: false, message: 'Bu hissede pozisyonunuz varken kaydı kaldıramazsınız.' };
-    }
-
-    setRegisteredSymbols((prev) => {
-      if (prev.includes(symbol)) return prev.filter((item) => item !== symbol);
-      return [...prev, symbol];
-    });
-    return { ok: true, message: isRegistered ? `${symbol} kayıtlı hisselerden çıkarıldı.` : `${symbol} kayıtlı hisselere eklendi.` };
-  }
-
-  function togglePinnedStock(symbol: string): { ok: boolean; message: string } {
-    const exists = stocks.some((item) => item.symbol === symbol);
-    if (!exists) return { ok: false, message: 'Hisse bulunamadı.' };
-    const isPinned = pinnedSymbols.includes(symbol);
-    setPinnedSymbols((prev) => {
-      if (isPinned) return prev.filter((item) => item !== symbol);
-      return [...prev, symbol];
-    });
-    return { ok: true, message: isPinned ? `${symbol} favorilerden çıkarıldı.` : `${symbol} favorilere eklendi.` };
-  }
-
-  const loadPredictions = useCallback(async (symbols?: string[], options?: { quiet?: boolean }) => {
-    if (!options?.quiet) setPredictLoading(true);
-    try {
-      const response = await fetch('/api/stocks/predict', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbols: symbols ?? BIST_SYMBOLS }),
-      });
-      if (!response.ok) return;
-      const payload = await response.json();
-      const map = payload?.predictions as Record<string, TechnicalPrediction> | undefined;
-      if (map && typeof map === 'object') setPredictions((prev) => ({ ...prev, ...map }));
-      const pu = payload?.updatedAt;
-      if (typeof pu === 'string') setPredictUpdatedAt(new Date(pu));
-    } catch {
-      // Tahmin servisi kapalıysa önceki cache kalır
-    } finally {
-      if (!options?.quiet) setPredictLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { loadPredictions(); }, [loadPredictions]);
-
-  useEffect(() => {
-    const interval = setInterval(() => loadPredictions(undefined, { quiet: true }), 5 * 60_000);
-    return () => clearInterval(interval);
-  }, [loadPredictions]);
-
-  useEffect(() => {
-    let isCancelled = false;
-    async function loadLiveQuotes() {
-      try {
-        const response = await fetch('/api/stocks/quotes');
-        if (!response.ok) {
-          if (!isCancelled) setMarketDataWarning('Canlı fiyatlar şu an güncellenemedi (ağ veya veri kaynağı).');
-          return;
-        }
-        const payload = await response.json();
-        const liveQuotes: Array<Partial<MarketStock> & { symbol: string }> = payload?.quotes ?? [];
-        if (isCancelled || !Array.isArray(liveQuotes) || liveQuotes.length === 0) {
-          if (!isCancelled) setMarketDataWarning('Canlı fiyatlar alınamadı.');
-          return;
-        }
-        setMarketDataWarning(null);
-        setStocks((prev) =>
-          prev.map((stock) => {
-            const live = liveQuotes.find((q) => q.symbol === stock.symbol);
-            if (!live || typeof live.price !== 'number') return stock;
-            const pctRaw = live.dailyChangePercent;
-            const pct = typeof pctRaw === 'number' ? pctRaw : typeof pctRaw === 'string' ? Number.parseFloat(pctRaw) : NaN;
-            return {
-              ...stock,
-              name: typeof live.name === 'string' && live.name.trim() ? live.name : stock.name,
-              price: live.price,
-              dailyChangePercent: Number.isFinite(pct) ? pct : stock.dailyChangePercent,
-              marketCap: typeof live.marketCap === 'number' ? live.marketCap : stock.marketCap,
-              source: typeof live.source === 'string' ? live.source : stock.source,
-            };
-          })
-        );
-        setLastUpdated(new Date());
-      } catch {
-        // Live quote alınamazsa mevcut fiyatları koruyoruz.
-      }
-    }
-    loadLiveQuotes();
-    const interval = setInterval(loadLiveQuotes, 60_000);
-    return () => { isCancelled = true; clearInterval(interval); };
-  }, []);
-
   const { user } = useAuth();
-  const [showAuthModal, setShowAuthModal] = useState(false);
 
   return (
-    <Router>
-      <div className={`min-h-screen ai-grid-bg font-sans selection:bg-blue-200 text-slate-900 dark:text-slate-100 flex flex-col relative overflow-x-hidden`}>
-        <header className="ai-glass ai-neon-border sticky top-0 z-40">
+    <div className={`min-h-screen ai-grid-bg font-sans selection:bg-blue-200 text-slate-900 dark:text-slate-100 flex flex-col relative overflow-x-hidden`}>
+        <a href="#main-content" className="skip-to-content">
+          Ana içeriğe atla
+        </a>
+        <header role="banner" className="ai-glass ai-neon-border sticky top-0 z-40">
           <div className="max-w-5xl mx-auto px-4 md:px-8 h-16 md:h-20 flex items-center justify-between">
             <Link
               to="/"
@@ -359,11 +355,30 @@ export default function App() {
                 <Link to="/portfolio" className="px-3 py-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-slate-800 hover:text-blue-700 dark:hover:text-blue-300 transition-colors">Portföyüm</Link>
               </nav>
               <button
+                onClick={handleReadPage}
+                className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-200 transition-colors"
+                aria-label={`Sayfayı sesli oku (${formatShortcut(shortcuts.readPage)} kısayolu)`}
+                aria-keyshortcuts={formatShortcut(shortcuts.readPage)}
+                title={`Sayfayı sesli oku (${formatShortcut(shortcuts.readPage)})`}
+              >
+                <Volume2 size={18} aria-hidden="true" />
+              </button>
+              <button
+                onClick={() => setIsCommandPaletteOpen(true)}
+                className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-200 transition-colors"
+                aria-label={`Komut paleti aç (${formatShortcut(shortcuts.openCommandPalette)})`}
+                aria-keyshortcuts={formatShortcut(shortcuts.openCommandPalette)}
+                title={`Komut paleti (${formatShortcut(shortcuts.openCommandPalette)})`}
+              >
+                <Command size={18} aria-hidden="true" />
+              </button>
+              <button
                 onClick={() => setDarkMode((d) => !d)}
                 className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-200 transition-colors"
-                aria-label="Karanlık mod"
+                aria-label={darkMode ? 'Aydınlık temaya geç' : 'Karanlık temaya geç'}
+                aria-pressed={darkMode}
               >
-                {darkMode ? <Sun size={18} /> : <Moon size={18} />}
+                {darkMode ? <Sun size={18} aria-hidden="true" /> : <Moon size={18} aria-hidden="true" />}
               </button>
               {user ? (
                 <Link to="/profile" className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
@@ -384,7 +399,10 @@ export default function App() {
             </div>
           </div>
           {tickerItems.length > 0 && (
-            <div className="border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/70 ticker-mask">
+            <div
+              aria-hidden="true"
+              className="border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/70 ticker-mask"
+            >
               <div className="ticker-track py-2">
                 {[...tickerItems, ...tickerItems].map((item, idx) => (
                   <div key={`${item.symbol}-${idx}`} className="flex items-center gap-2 px-4 whitespace-nowrap">
@@ -401,6 +419,12 @@ export default function App() {
         </header>
 
         {showAuthModal && <AuthModal onClose={() => setShowAuthModal(false)} />}
+        <CommandPalette
+          isOpen={isCommandPaletteOpen}
+          commands={COMMAND_ITEMS}
+          onRunCommand={runCommand}
+          onClose={() => setIsCommandPaletteOpen(false)}
+        />
 
         {/* Arka plan filigran logolar (çapraz + yan yana) */}
         <div className="pointer-events-none fixed inset-0 z-0 hidden xl:block" aria-hidden="true">
@@ -446,20 +470,26 @@ export default function App() {
           </div>
         </div>
 
-        <main className="flex-1 max-w-5xl w-full mx-auto pb-32 pt-4 md:pt-8 relative z-10">
+        <main id="main-content" tabIndex={-1} className="flex-1 max-w-5xl w-full mx-auto pb-32 pt-4 md:pt-8 relative z-10">
           <Routes>
             <Route
               path="/profile"
               element={
                 <Profile
-                  cashBalance={cashBalance}
-                  holdingsValue={holdingsValue}
-                  totalBalance={totalBalance}
-                  registeredCount={registeredSymbols.length}
-                  holdingsCount={holdings.reduce((sum, holding) => sum + holding.quantity, 0)}
-                  transactions={transactions}
-                  onDepositCash={depositCash}
-                  onWithdrawCash={withdrawCash}
+                  cashBalance={portfolio.cashBalance}
+                  holdingsValue={portfolio.holdingsValue}
+                  totalBalance={portfolio.totalBalance}
+                  registeredCount={portfolio.registeredSymbols.length}
+                  holdingsCount={portfolio.holdings.reduce((sum, holding) => sum + holding.quantity, 0)}
+                  transactions={portfolio.transactions}
+                  onDepositCash={portfolio.depositCash}
+                  onWithdrawCash={portfolio.withdrawCash}
+                  conciseMode={conciseMode}
+                  onConciseModeChange={setConciseMode}
+                  shortcuts={shortcuts}
+                  onShortcutChange={setShortcut}
+                  onShortcutReset={resetShortcuts}
+                  onRestartOnboarding={() => setOnboardingSeen(false)}
                 />
               }
             />
@@ -471,10 +501,10 @@ export default function App() {
                   predictions={predictions}
                   predictLoading={predictLoading}
                   lastUpdated={lastUpdated}
-                  registeredSymbols={registeredSymbols}
-                  pinnedSymbols={pinnedSymbols}
-                  onToggleRegisteredStock={toggleRegisteredStock}
-                  onTogglePinnedStock={togglePinnedStock}
+                  registeredSymbols={portfolio.registeredSymbols}
+                  pinnedSymbols={portfolio.pinnedSymbols}
+                  onToggleRegisteredStock={portfolio.toggleRegisteredStock}
+                  onTogglePinnedStock={portfolio.togglePinnedStock}
                 />
               }
             />
@@ -482,22 +512,22 @@ export default function App() {
               path="/portfolio"
               element={
                 <Dashboard
-                  cashBalance={cashBalance}
-                  holdings={holdings}
-                  holdingsValue={holdingsValue}
-                  totalBalance={totalBalance}
+                  cashBalance={portfolio.cashBalance}
+                  holdings={portfolio.holdings}
+                  holdingsValue={portfolio.holdingsValue}
+                  totalBalance={portfolio.totalBalance}
                   stocks={registeredStocks}
                   allStocks={stocks}
-                  registeredSymbols={registeredSymbols}
+                  registeredSymbols={portfolio.registeredSymbols}
                   predictions={predictions}
                   predictLoading={predictLoading}
                   predictUpdatedAt={predictUpdatedAt}
                   lastUpdated={lastUpdated}
                   marketDataWarning={marketDataWarning}
-                  onBuyStock={buyStock}
-                  onSellStock={sellStock}
-                  onDepositCash={depositCash}
-                  onWithdrawCash={withdrawCash}
+                  onBuyStock={portfolio.buyStock}
+                  onSellStock={portfolio.sellStock}
+                  onDepositCash={portfolio.depositCash}
+                  onWithdrawCash={portfolio.withdrawCash}
                 />
               }
             />
@@ -516,8 +546,7 @@ export default function App() {
           </Routes>
         </main>
 
-        <GlobalAssistant />
-      </div>
-    </Router>
+      <GlobalAssistant onVoiceCommand={handleVoiceCommand} shortcuts={shortcuts} />
+    </div>
   );
 }

@@ -1,14 +1,16 @@
 {
-  "name": "react-example",
+  "name": "finto",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx backend/server.ts",
+    "dev": "concurrently --names \"web,voice\" --prefix-colors \"blue,magenta\" --kill-others-on-fail false \"npm:dev:web\" \"npm:dev:voice\"",
+    "dev:web": "tsx backend/server.ts",
+    "dev:voice": "python ai/voice_assistant.py",
     "build": "vite build --config frontend/vite.config.ts",
-    "start": "node backend/server.ts",
+    "start": "cross-env NODE_ENV=production tsx backend/server.ts",
     "preview": "vite preview --config frontend/vite.config.ts",
-    "clean": "rm -rf frontend/dist",
+    "clean": "rimraf frontend/dist",
     "lint": "tsc --project frontend/tsconfig.json --noEmit",
     "calibrate-thresholds": "tsx scripts/backtest-thresholds.ts"
   },
@@ -27,10 +29,13 @@
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "react-router-dom": "^7.15.0",
-    "uuid": "^14.0.0",
-    "vite": "^6.2.3"
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "rimraf": "^6.0.1",
+    "vite": "^6.2.3",
     "@types/bcryptjs": "^2.4.6",
     "@types/better-sqlite3": "^7.6.13",
     "@types/cookie-parser": "^1.4.10",
@@ -43,7 +48,6 @@
     "autoprefixer": "^10.4.21",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
-    "typescript": "~5.8.2",
-    "vite": "^6.2.3"
+    "typescript": "~5.8.2"
   }
 }
