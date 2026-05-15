@@ -90,8 +90,13 @@ export function parseVoiceCommand(
   if (!text) return null;
 
   // Yardım
-  if (/(yardım|yardim|kısayol|kisayol|komut listesi)/.test(text)) {
+  if (/(yardım|yardim|kısayol|kisayol|komut listesi|ne yapabilirsin|komutlar neler|komutlar(ı|i) söyle)/.test(text)) {
     return { type: 'help' };
+  }
+
+  // Asistanı aç
+  if (/(asistan(ı|i)? aç|panel aç|sohbeti aç|asistan(ı|i)? göster)/.test(text)) {
+    return { type: 'open-assistant' };
   }
 
   // Görünüm modu
@@ -122,7 +127,7 @@ export function parseVoiceCommand(
 
   // Nakit / param ne kadar
   if (
-    /(nakit (bakiyem|param|m(ı|i)|var)|param ne kadar|ne kadar param|bakiyem ne|bakiyem(i)? söyle|param(ı|i) söyle|ne kadar nakit|kaç para(m)? var|kac para(m)? var|nakitim ne|hesab(ı|i)mda ne kadar para var)/.test(
+    /(nakit (bakiyem|param|m(ı|i)|var)|param ne kadar|ne kadar param|bakiyem ne|bakiyem(i)? söyle|param(ı|i) söyle|ne kadar nakit|kaç para(m)? var|kac para(m)? var|kaç liram|kac liram|nakitim ne|hesab(ı|i)mda ne kadar para var)/.test(
       text,
     )
   ) {
@@ -131,7 +136,7 @@ export function parseVoiceCommand(
 
   // Tam portföy özeti — toplam varlık + nakit + hisse + her pozisyon
   if (
-    /(portföyümü oku|portfoyumu oku|portföyü oku|portfoyu oku|portföyümü söyle|portfoyumu soyle|portföy özet|portfoy ozet|toplam varl(ı|i)k|toplam ne kadar|varl(ı|i)ğ(ı|i)m ne|varligim ne|net varl(ı|i)k|tüm portföy|tum portfoy|hesab(ı|i)m(ı|i)n özeti|hesabimin ozeti)/.test(
+    /(portföyümü oku|portfoyumu oku|portföyü oku|portfoyu oku|portföyümü söyle|portfoyumu soyle|portföy özet|portfoy ozet|toplam varl(ı|i)k|toplam ne kadar|varl(ı|i)ğ(ı|i)m ne|varligim ne|net varl(ı|i)k|tüm portföy|tum portfoy|hesab(ı|i)m(ı|i)n özeti|hesabimin ozeti|bana özet|bana ozet|özet geç|ozet gec|gün nas(ı|i)l geçti|gun nasil gecti|durumum ne|kar zarar)/.test(
       text,
     )
   ) {
@@ -171,7 +176,7 @@ export function parseVoiceCommand(
   }
 
   // Liste komutları: borsa / hisseler / tahminler
-  if (/(tahmin|öneri|oneri|fırsat|firsat|al sat sinyali|en iyi hisseler)/.test(text)) {
+  if (/(tahmin|öneri|oneri|fırsat|firsat|al sat sinyali|en iyi hisseler|bugün ne almal(ı|i)y(ı|i)m|bugun ne almaliyim|hangi hisse iyi)/.test(text)) {
     const digitMatch = text.match(/(\d+)/);
     const count = digitMatch ? Math.min(10, Math.max(1, parseInt(digitMatch[1], 10))) : undefined;
     return { type: 'list-predictions', count };
@@ -183,8 +188,10 @@ export function parseVoiceCommand(
   }
 
   // Alım/satım — "ASELS 5 lot al", "5 lot ASELS al", "aselsan al 5 lot"
-  const isSell = /\b(sat|satıver|satmak istiyorum)\b/.test(text);
-  const isBuy = /\b(al|alıver|almak istiyorum|satın al|satin al)\b/.test(text);
+  // "satın al" → BUY (sat token'ını yakalamasın diye önce dışla).
+  const hasBuyPhrase = /\b(satın al|satin al|alıver|aliver|almak istiyorum)\b/.test(text);
+  const isBuy = hasBuyPhrase || /\bal\b/.test(text);
+  const isSell = !hasBuyPhrase && /\b(sat|satıver|sativer|satmak istiyorum)\b/.test(text);
   if (isBuy || isSell) {
     const sym = findSymbol(text, knownSymbols);
     if (sym) {

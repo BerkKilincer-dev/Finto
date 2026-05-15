@@ -14,17 +14,38 @@ type Props = {
   onOpenAuth: () => void;
 };
 
-const VOICE_COMMANDS: Array<{ label: string; example: string }> = [
-  { label: 'Borsayı dinle', example: '"hisseleri oku" veya "borsa"' },
-  { label: 'Tahminleri dinle', example: '"tahminleri oku" veya "fırsat"' },
-  { label: 'Tek hisse fiyatı', example: '"Aselsan fiyatı"' },
-  { label: 'Tek hisse tahmini', example: '"Garanti tahmini"' },
-  { label: 'Portföyünü dinle', example: '"portföyümü oku"' },
-  { label: 'Nakit bakiye', example: '"param ne kadar"' },
-  { label: 'Hisse al', example: '"Aselsan beş lot al"' },
-  { label: 'Hisse sat', example: '"Garanti üç lot sat"' },
-  { label: 'Yardım / kısayollar', example: '"yardım"' },
-  { label: 'Normal görünüme dön', example: '"normal görünüm"' },
+type CommandGroup = {
+  title: string;
+  items: Array<{ label: string; example: string }>;
+};
+
+const VOICE_COMMAND_GROUPS: CommandGroup[] = [
+  {
+    title: 'Bilgi',
+    items: [
+      { label: 'Borsayı dinle', example: '"hisseleri oku"' },
+      { label: 'Tahminleri dinle', example: '"tahminleri oku" veya "bugün ne almalıyım"' },
+      { label: 'Tek hisse fiyatı', example: '"Aselsan fiyatı"' },
+      { label: 'Tek hisse tahmini', example: '"Garanti tahmini"' },
+      { label: 'Portföy özeti', example: '"bana özet geç" veya "portföyümü oku"' },
+      { label: 'Nakit bakiye', example: '"kaç param var"' },
+    ],
+  },
+  {
+    title: 'İşlem',
+    items: [
+      { label: 'Hisse al', example: '"Aselsan beş lot al"' },
+      { label: 'Hisse sat (onay ister)', example: '"Garanti üç lot sat" → "evet"' },
+    ],
+  },
+  {
+    title: 'Navigasyon ve Kontrol',
+    items: [
+      { label: 'Asistanı aç', example: '"asistanı aç"' },
+      { label: 'Yardım', example: '"ne yapabilirsin"' },
+      { label: 'Normal görünüme dön', example: '"normal görünüm"' },
+    ],
+  },
 ];
 
 export default function AccessibleShell({ portfolio, stocks, marketDataWarning, onOpenAuth }: Props) {
@@ -244,18 +265,28 @@ export default function AccessibleShell({ portfolio, stocks, marketDataWarning, 
           </div>
         </section>
 
-        <section aria-labelledby="cmd-title" className="space-y-3">
+        <section aria-labelledby="cmd-title" className="space-y-4">
           <h2 id="cmd-title" className="text-2xl font-black">
             Sesli komutlar
           </h2>
-          <ul className="space-y-2">
-            {VOICE_COMMANDS.map((c) => (
-              <li key={c.label} className="border-2 border-slate-900 dark:border-white p-3">
-                <p className="text-lg font-black">{c.label}</p>
-                <p className="text-base">Söyle: {c.example}</p>
-              </li>
-            ))}
-          </ul>
+          {VOICE_COMMAND_GROUPS.map((group) => {
+            const groupId = `cmd-group-${group.title.replace(/\s+/g, '-').toLowerCase()}`;
+            return (
+              <section key={group.title} aria-labelledby={groupId} className="space-y-2">
+                <h3 id={groupId} className="text-xl font-black underline">
+                  {group.title}
+                </h3>
+                <ul className="space-y-2">
+                  {group.items.map((c) => (
+                    <li key={c.label} className="border-2 border-slate-900 dark:border-white p-3">
+                      <p className="text-lg font-black">{c.label}</p>
+                      <p className="text-base">Söyle: {c.example}</p>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            );
+          })}
         </section>
       </main>
 

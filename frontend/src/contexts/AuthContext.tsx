@@ -11,6 +11,7 @@ type AuthCtx = {
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
+  signInAsDemo: () => Promise<void>;
   signOut: () => Promise<void>;
 };
 
@@ -52,13 +53,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     else throw new Error(data.error ?? 'Kayıt başarısız.');
   }
 
+  async function signInAsDemo() {
+    const res = await fetch('/api/auth/demo', { method: 'POST', credentials: 'include' });
+    const data = await res.json();
+    if (res.ok && data.user) setUser(data.user);
+    else throw new Error(data.error ?? 'Demo hesap oluşturulamadı.');
+  }
+
   async function signOut() {
     await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
     setUser(null);
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, signOut }}>
+    <AuthContext.Provider value={{ user, loading, login, register, signInAsDemo, signOut }}>
       {children}
     </AuthContext.Provider>
   );

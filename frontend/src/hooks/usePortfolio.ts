@@ -291,8 +291,26 @@ export function usePortfolio(stocks: MarketStock[]): PortfolioApi {
         return { ok: false, message: 'Lot adedi 1 veya daha büyük olmalı.' };
 
       if (user) {
+        // Optimistic update: UI'ı hemen güncelle, sonra server'la teyitle. Hata olursa geri sar.
+        const cost = stock.price * quantity;
+        const previousSnap = snap;
+        setSnap((prev) => {
+          const existing = prev.holdings.find((h) => h.symbol === symbol);
+          const holdings = !existing
+            ? [...prev.holdings, { symbol, quantity, averageCost: stock.price }]
+            : prev.holdings.map((h) => {
+                if (h.symbol !== symbol) return h;
+                const newQty = h.quantity + quantity;
+                const weightedAvg = (h.averageCost * h.quantity + cost) / newQty;
+                return { ...h, quantity: newQty, averageCost: weightedAvg };
+              });
+          return { ...prev, cashBalance: prev.cashBalance - cost, holdings };
+        });
         const result = await callPortfolio('buy', { symbol, quantity, price: stock.price });
-        if (!result.ok) return { ok: false, message: result.error ?? 'Alım başarısız.' };
+        if (!result.ok) {
+          setSnap(previousSnap);
+          return { ok: false, message: result.error ?? 'Alım başarısız.' };
+        }
         if (result.snapshot) setSnap(result.snapshot);
         return { ok: true, message: `${symbol} için ${quantity} lot alım gerçekleşti.` };
       }
@@ -332,10 +350,29 @@ export function usePortfolio(stocks: MarketStock[]): PortfolioApi {
         return { ok: false, message: 'Lot adedi 1 veya daha büyük olmalı.' };
 
       if (user) {
-        const result = await callPortfolio('sell', { symbol, quantity, price: stock.price });
-        if (!result.ok) return { ok: false, message: result.error ?? 'Satış başarısız.' };
-        if (result.snapshot) setSnap(result.snapshot);
+        // Önce sahip olunan miktarı UI'da kontrol et (snapshot tazese sunucu da reddedecek).
+        const holdingNow = snap.holdings.find((h) => h.symbol === symbol);
+        if (!holdingNow || holdingNow.quantity < quantity) {
+          return { ok: false, message: `En fazla ${holdingNow?.quantity ?? 0} lot satabilirsiniz.` };
+        }
         const proceeds = stock.price * quantity;
+        const previousSnap = snap;
+        setSnap((prev) => {
+          const newQty = (holdingNow.quantity ?? 0) - quantity;
+          const holdings =
+            newQty === 0
+              ? prev.holdings.filter((h) => h.symbol !== symbol)
+              : prev.holdings.map((h) =>
+                  h.symbol === symbol ? { ...h, quantity: newQty } : h,
+                );
+          return { ...prev, cashBalance: prev.cashBalance + proceeds, holdings };
+        });
+        const result = await callPortfolio('sell', { symbol, quantity, price: stock.price });
+        if (!result.ok) {
+          setSnap(previousSnap);
+          return { ok: false, message: result.error ?? 'Satış başarısız.' };
+        }
+        if (result.snapshot) setSnap(result.snapshot);
         return {
           ok: true,
           message: `${symbol} için ${quantity} lot satış gerçekleşti. +${fmtTry(proceeds)}`,

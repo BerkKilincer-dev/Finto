@@ -9,35 +9,49 @@ Finto, Borsa İstanbul (BIST) hisselerini gerçek zamanlı takip eden, teknik an
 ```
 Finto/
 ├── backend/                    # Node.js / Express API
-│   ├── server.ts               # REST endpoint'leri + Vite entegrasyonu
-│   ├── auth.ts                 # Kayıt / giriş / JWT cookie session
-│   ├── portfolio.ts            # Kullanıcı portföyü (DB-backed)
+│   ├── server.ts               # REST endpoint'leri + güvenlik middleware + Vite entegrasyonu
+│   ├── auth.ts                 # Kayıt / giriş / şifre sıfırlama / demo hesap / JWT cookie
+│   ├── portfolio.ts            # Kullanıcı portföyü + CSV export (DB-backed)
+│   ├── alerts.ts               # Fiyat alarmları CRUD
 │   ├── predictionEngine.ts     # Teknik analiz motoru (gruplanmış skor, ATR)
 │   ├── yahooClient.ts          # Yahoo Finance istek katmanı (timeout + retry)
 │   ├── thresholdDefaults.ts    # Trend eşiği (env ile override)
 │   └── db.ts                   # SQLite bağlantısı + şema
 │
 ├── frontend/                   # React 19 SPA (Vite)
+│   ├── public/                 # manifest.json, service worker (sw.js), PWA ikonları
 │   └── src/
 │       ├── App.tsx             # Router + voice/shortcut orkestrasyonu
-│       ├── main.tsx            # Auth + Announcer + Accessibility provider'ları
+│       ├── main.tsx            # ErrorBoundary + i18n + Auth + Announcer + Accessibility
 │       ├── pages/
 │       │   ├── Home.tsx
-│       │   ├── Dashboard.tsx   # Portföy ekranı
-│       │   ├── StockDetail.tsx
-│       │   └── Profile.tsx
+│       │   ├── Dashboard.tsx   # Portföy ekranı + sektör dağılımı
+│       │   ├── StockDetail.tsx # Hisse detay + grafik + alarm + tahmin geçmişi
+│       │   ├── Compare.tsx     # İki hisse karşılaştırma (/compare)
+│       │   ├── Shortcuts.tsx   # Yazdırılabilir kısayol kartı (/shortcuts)
+│       │   └── Profile.tsx     # Profil + performans grafiği + hesap yönetimi
 │       ├── components/
 │       │   ├── GlobalAssistant.tsx
 │       │   ├── AccessibleShell.tsx
 │       │   ├── CommandPalette.tsx
 │       │   ├── AccessibilityTour.tsx
-│       │   └── AuthModal.tsx
+│       │   ├── AuthModal.tsx
+│       │   ├── ErrorBoundary.tsx
+│       │   ├── SymbolSearch.tsx        # Header autocomplete
+│       │   ├── AlertPanel.tsx          # Fiyat alarmı UI
+│       │   ├── PredictionHistory.tsx
+│       │   ├── PerformanceChart.tsx
+│       │   ├── SectorBreakdown.tsx
+│       │   ├── NewsSummaryButton.tsx
+│       │   └── Skeleton.tsx
 │       ├── contexts/
 │       │   └── AuthContext.tsx
 │       ├── hooks/
-│       │   ├── usePortfolio.ts     # Anonim → localStorage, giriş → API
-│       │   ├── useStocksQuotes.ts  # Canlı fiyat polling
+│       │   ├── usePortfolio.ts     # Anonim → localStorage, giriş → API (optimistic update)
+│       │   ├── useStocksQuotes.ts  # Canlı fiyat polling (retry + sekme-duyarlı)
 │       │   ├── usePredictions.ts   # Teknik tahmin polling
+│       │   ├── useAlerts.ts        # Fiyat alarmı yönetimi + tetikleme
+│       │   ├── useI18n.tsx         # TR/EN dil desteği
 │       │   ├── useVoiceAssistant.ts
 │       │   ├── useKeyboardShortcuts.ts
 │       │   ├── useAccessibilitySettings.tsx
@@ -46,16 +60,22 @@ Finto/
 │       │   ├── accessibilityConfig.ts
 │       │   └── appEvents.ts
 │       └── data/
-│           └── bistWatchlist.ts
+│           ├── bistWatchlist.ts
+│           └── sectors.ts          # Sembol → sektör eşleştirme
 │
 ├── ai/                         # Python sesli asistan (WebSocket)
-│   └── voice_assistant.py
+│   └── voice_assistant.py      # Gemini streaming + konuşma hafızası + abort
 │
 ├── scripts/
 │   └── backtest-thresholds.ts  # Walk-forward eşik kalibrasyonu
 │
+├── tests/                      # Vitest birim testleri
+│   ├── voiceCommands.test.ts
+│   └── predictionEngine.test.ts
+│
 ├── .env                        # API anahtarları (git'e eklenmez)
 ├── finto.db                    # SQLite (otomatik oluşur)
+├── vitest.config.ts
 └── package.json
 ```
 
@@ -65,13 +85,31 @@ Finto/
 
 | Veri                  | Kaynak                                       | Güncelleme Sıklığı       |
 |-----------------------|----------------------------------------------|--------------------------|
-| Hisse fiyatları       | Yahoo Finance API                            | Her 60 saniyede bir      |
+| Hisse fiyatları       | Yahoo Finance API                            | Her 60 sn (sekme gizliyse durur) |
 | Günlük % değişim      | Yahoo Finance API                            | Her 60 saniyede bir      |
 | Teknik tahminler      | Kendi motoru (gruplanmış skor + ATR)         | Her 5 dakikada bir       |
+| Tahmin geçmişi        | SQLite `prediction_history`                  | Günde 1 snapshot         |
 | Kullanıcı portföyü    | SQLite (giriş yapıldıysa) / localStorage     | Anlık                    |
+| Fiyat alarmları       | SQLite `alerts` (giriş) / localStorage       | Fiyat polling'inde kontrol |
 | Sesli yanıtlar        | Google Gemini AI (`gemini-2.5-flash`, env override) | Streaming          |
 
 > Yahoo Finance gecikmeli veri sağlar (~15 dakika). Gerçek zamanlı borsa verisi değildir.
+
+---
+
+## Öne Çıkan Özellikler
+
+- **Sesli komut + erişilebilir mod** — `Alt+E` ile sade ekran; "Aselsan beş lot al", "bana özet geç" gibi Türkçe komutlar. Satışta sesli onay ister.
+- **Sembol arama (autocomplete)** — Üst menüden "Aselsan" yazınca anlık öneri, klavyeyle gezilebilir.
+- **Fiyat alarmları** — Hisse hedef fiyata ulaşınca sesli + tarayıcı bildirimi.
+- **Hisse karşılaştırma** — `/compare` ile iki hisse yan yana grafik + teknik skor.
+- **Tahmin geçmişi** — Sistemin geçmiş günlerdeki tahminleri hisse detayında listelenir.
+- **Performans grafiği & sektör dağılımı** — Portföyün kar/zarar trendi + sektörel çeşitlendirme yorumu.
+- **Demo hesap** — Tek tıkla geçici hesap oluşturup denemek mümkün.
+- **CSV export** — İşlem geçmişini Excel uyumlu CSV olarak indir.
+- **PWA** — "Uygulamaya ekle" desteği, çevrimdışı önbellek.
+- **TR/EN dil desteği** — Üst menüden değiştirilebilir.
+- **Güvenlik** — helmet, CORS, rate limiting, login brute-force koruması, şifre sıfırlama akışı.
 
 ---
 
@@ -126,6 +164,13 @@ npm install
 pip install -r requirements.txt
 ```
 
+### Testler
+
+```bash
+npm test          # Vitest birim testleri (voiceCommands, predictionEngine)
+npm run typecheck # TypeScript tip kontrolü
+```
+
 ### 2. `.env` dosyası
 
 ```env
@@ -172,18 +217,25 @@ npm start
 ## API Endpoint'leri
 
 ### Hisse verileri (auth gerekmez)
-| Method | Path                    | Açıklama                          |
-|--------|-------------------------|-----------------------------------|
-| GET    | `/api/stocks/quotes`    | BIST listesi için canlı fiyatlar  |
-| POST   | `/api/stocks/predict`   | Teknik tahminler                  |
+| Method | Path                              | Açıklama                          |
+|--------|-----------------------------------|-----------------------------------|
+| GET    | `/api/health`                     | Sağlık kontrolü (status, uptime)  |
+| GET    | `/api/stocks/quotes`              | BIST listesi için canlı fiyatlar  |
+| POST   | `/api/stocks/predict`             | Teknik tahminler                  |
+| GET    | `/api/predictions/:symbol/history`| Bir sembolün tahmin geçmişi       |
 
 ### Auth
-| Method | Path                  | Açıklama               |
-|--------|-----------------------|------------------------|
-| POST   | `/api/auth/register`  | Yeni hesap             |
-| POST   | `/api/auth/login`     | Giriş                  |
-| GET    | `/api/auth/me`        | Aktif oturum           |
-| POST   | `/api/auth/logout`    | Çıkış                  |
+| Method | Path                        | Açıklama                          |
+|--------|-----------------------------|-----------------------------------|
+| POST   | `/api/auth/register`        | Yeni hesap (şifre ≥ 10 karakter + rakam) |
+| POST   | `/api/auth/login`           | Giriş (brute-force korumalı)      |
+| POST   | `/api/auth/demo`            | Anlık demo hesap oluştur          |
+| GET    | `/api/auth/me`              | Aktif oturum                      |
+| POST   | `/api/auth/logout`          | Çıkış                             |
+| POST   | `/api/auth/change-password` | Şifre değiştir (auth)             |
+| POST   | `/api/auth/forgot-password` | Şifre sıfırlama token üret        |
+| POST   | `/api/auth/reset-password`  | Token ile yeni şifre belirle      |
+| POST   | `/api/auth/delete-account`  | Hesabı kalıcı sil (auth)          |
 
 ### Portföy (auth zorunlu)
 | Method | Path                                  | Açıklama                                  |
@@ -196,11 +248,20 @@ npm start
 | POST   | `/api/portfolio/registered/toggle`    | `{ symbol }`                              |
 | POST   | `/api/portfolio/pinned/toggle`        | `{ symbol }`                              |
 | POST   | `/api/portfolio/import`               | Anonim localStorage portföyünü server'a aktarır (server boşsa) |
+| GET    | `/api/portfolio/transactions.csv`     | İşlem geçmişini CSV olarak indir          |
+
+### Fiyat alarmları (auth zorunlu)
+| Method | Path                       | Açıklama                              |
+|--------|----------------------------|---------------------------------------|
+| GET    | `/api/alerts`              | Kullanıcının tüm alarmları            |
+| POST   | `/api/alerts`              | `{ symbol, direction, targetPrice }`  |
+| POST   | `/api/alerts/:id/trigger`  | Alarmı tetiklendi olarak işaretle     |
+| DELETE | `/api/alerts/:id`          | Alarmı sil                            |
 
 ### Sesli asistan
 | Protokol  | Adres                | Açıklama                |
 |-----------|----------------------|-------------------------|
-| WebSocket | `ws://localhost:8001` | Streaming Gemini yanıtı |
+| WebSocket | `ws://localhost:8001` | Streaming Gemini yanıtı (konuşma hafızası + abort) |
 
 ---
 

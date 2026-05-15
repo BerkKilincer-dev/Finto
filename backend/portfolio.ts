@@ -377,4 +377,44 @@ router.post('/import', (req: Request, res: Response) => {
   res.json({ imported: true, snapshot: readSnapshot(uid) });
 });
 
+// GET /api/portfolio/transactions.csv — vergi/raporlama için CSV export
+router.get('/transactions.csv', (req: Request, res: Response) => {
+  const userId = (req as Request & { user: { id: string } }).user.id;
+  type TxRow = {
+    id: string;
+    type: string;
+    amount: number;
+    symbol: string | null;
+    quantity: number | null;
+    created_at: number;
+  };
+  const rows = db.prepare(
+    'SELECT id, type, amount, symbol, quantity, created_at FROM transactions WHERE user_id = ? ORDER BY created_at DESC',
+  ).all(userId) as TxRow[];
+
+  const header = 'id,tarih,tip,sembol,lot,tutar_tl\n';
+  const escape = (v: string) => `"${v.replace(/"/g, '""')}"`;
+  const body = rows
+    .map((r) => {
+      const date = new Date(r.created_at * 1000).toISOString();
+      return [
+        escape(r.id),
+        escape(date),
+        escape(r.type),
+        escape(r.symbol ?? ''),
+        r.quantity ?? '',
+        r.amount.toFixed(2),
+      ].join(',');
+    })
+    .join('\n');
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="finto-islemler-${new Date().toISOString().slice(0, 10)}.csv"`,
+  );
+  // UTF-8 BOM — Excel'in Türkçe karakterleri doğru okuması için.
+  res.send('﻿' + header + body + '\n');
+});
+
 export default router;

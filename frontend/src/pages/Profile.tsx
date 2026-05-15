@@ -4,6 +4,7 @@ import { ArrowRight, Laptop, Lock, LogOut, Plus, ShieldCheck, Wallet } from 'luc
 import { useMemo, useRef, useState } from 'react';
 import { useAnnouncer } from '../hooks/useAnnouncer.tsx';
 import { APP_EVENTS } from '../hooks/appEvents';
+import PerformanceChart from '../components/PerformanceChart';
 import {
   formatShortcut,
   type ShortcutActionId,
@@ -131,24 +132,76 @@ export default function Profile({
     return 'Web';
   }, []);
 
-  function handleChangePasswordSubmit(e: { preventDefault(): void }) {
+  async function handleChangePasswordSubmit(e: { preventDefault(): void }) {
     e.preventDefault();
     if (!currentPassword || !newPassword || !newPasswordAgain) {
-      showFeedback('error', 'Tum sifre alanlarini doldurun.');
+      showFeedback('error', 'Tüm şifre alanlarını doldurun.');
       return;
     }
-    if (newPassword.length < 8) {
-      showFeedback('error', 'Yeni sifre en az 8 karakter olmali.');
+    if (newPassword.length < 10) {
+      showFeedback('error', 'Yeni şifre en az 10 karakter olmalı.');
+      return;
+    }
+    if (!/\d/.test(newPassword)) {
+      showFeedback('error', 'Yeni şifre en az bir rakam içermeli.');
       return;
     }
     if (newPassword !== newPasswordAgain) {
-      showFeedback('error', 'Yeni sifre tekrar alani eslesmiyor.');
+      showFeedback('error', 'Yeni şifre tekrar alanı eşleşmiyor.');
       return;
     }
-    showFeedback('success', 'Sifre degistirme API baglantisi bir sonraki adimda aktif edilecek.');
-    setCurrentPassword('');
-    setNewPassword('');
-    setNewPasswordAgain('');
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showFeedback('error', data?.error ?? 'Şifre değiştirilemedi.');
+        return;
+      }
+      showFeedback('success', 'Şifreniz güncellendi.');
+      setCurrentPassword('');
+      setNewPassword('');
+      setNewPasswordAgain('');
+    } catch {
+      showFeedback('error', 'Sunucuya ulaşılamadı.');
+    }
+  }
+
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
+  async function handleDeleteAccount(e: { preventDefault(): void }) {
+    e.preventDefault();
+    if (!deletePassword) {
+      showFeedback('error', 'Şifrenizi girerek hesap silmeyi onaylayın.');
+      return;
+    }
+    setDeleteBusy(true);
+    try {
+      const res = await fetch('/api/auth/delete-account', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: deletePassword }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showFeedback('error', data?.error ?? 'Hesap silinemedi.');
+        setDeleteBusy(false);
+        return;
+      }
+      announce('Hesabınız silindi. Çıkış yapılıyor.', 'assertive');
+      await signOut();
+      navigate('/');
+    } catch {
+      showFeedback('error', 'Sunucuya ulaşılamadı.');
+      setDeleteBusy(false);
+    }
   }
 
   function parseShortcutInput(input: string): ShortcutSpec | null {
@@ -223,6 +276,8 @@ export default function Profile({
           <p className="text-xl font-black text-slate-900 dark:text-white mt-1">{holdingsCount}</p>
         </div>
       </div>
+
+      <PerformanceChart transactions={transactions} currentTotal={totalBalance} />
 
       <div className="grid md:grid-cols-2 gap-3">
         <form
@@ -454,8 +509,15 @@ export default function Profile({
       </div>
 
       <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-700">
+        <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
           <p className="text-[10px] uppercase tracking-widest font-black text-slate-400">Son Islemler</p>
+          <a
+            href="/api/portfolio/transactions.csv"
+            download
+            className="text-xs font-black text-blue-700 dark:text-blue-300 hover:underline"
+          >
+            CSV indir
+          </a>
         </div>
         <div className="divide-y divide-slate-100 dark:divide-slate-700/60">
           {recentTransactions.length === 0 && (
@@ -498,6 +560,56 @@ export default function Profile({
         <LogOut size={16} />
         Çıkış Yap
       </button>
+
+      <div className="bg-white dark:bg-slate-800 border-2 border-red-200 dark:border-red-900 rounded-2xl overflow-hidden">
+        <div className="px-4 py-3 border-b border-red-200 dark:border-red-900">
+          <p className="text-[10px] uppercase tracking-widest font-black text-red-600 dark:text-red-400">Tehlikeli Bölge</p>
+        </div>
+        <div className="p-4 space-y-3">
+          {!showDeleteConfirm ? (
+            <button
+              type="button"
+              onClick={() => setShowDeleteConfirm(true)}
+              className="w-full md:w-auto px-4 py-2.5 rounded-xl border-2 border-red-300 dark:border-red-800 text-red-700 dark:text-red-400 font-black text-sm hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors"
+            >
+              Hesabımı Kalıcı Olarak Sil
+            </button>
+          ) : (
+            <form onSubmit={handleDeleteAccount} className="space-y-3" aria-labelledby="delete-acct-title">
+              <h3 id="delete-acct-title" className="text-sm font-black text-red-700 dark:text-red-400">
+                Bu işlem geri alınamaz. Portföyünüz, işlemleriniz ve tüm verileriniz silinecek.
+              </h3>
+              <label htmlFor="delete-pwd" className="sr-only">Onay için şifreniz</label>
+              <input
+                id="delete-pwd"
+                type="password"
+                value={deletePassword}
+                onChange={(e) => setDeletePassword(e.target.value)}
+                placeholder="Şifrenizi girerek onaylayın"
+                autoComplete="current-password"
+                className="w-full rounded-xl border-2 border-red-300 dark:border-red-800 bg-white dark:bg-slate-900 px-3 py-2 text-sm font-semibold"
+                required
+              />
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  disabled={deleteBusy}
+                  className="flex-1 px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-black text-sm transition-colors disabled:opacity-50"
+                >
+                  {deleteBusy ? 'Siliniyor...' : 'Evet, hesabımı sil'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setShowDeleteConfirm(false); setDeletePassword(''); }}
+                  className="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 font-black text-sm"
+                >
+                  Vazgeç
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

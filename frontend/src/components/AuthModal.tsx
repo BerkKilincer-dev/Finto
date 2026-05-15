@@ -7,9 +7,9 @@ import { APP_EVENTS } from '../hooks/appEvents';
 type Props = { onClose: () => void };
 
 export default function AuthModal({ onClose }: Props) {
-  const { login, register } = useAuth();
+  const { login, register, signInAsDemo } = useAuth();
   const { announce } = useAnnouncer();
-  const [tab, setTab] = useState<'login' | 'register'>('login');
+  const [tab, setTab] = useState<'login' | 'register' | 'forgot' | 'reset'>('login');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -17,6 +17,9 @@ export default function AuthModal({ onClose }: Props) {
   const [showPass, setShowPass] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [info, setInfo] = useState<string | null>(null);
+  const [resetToken, setResetToken] = useState('');
+  const [newPassword, setNewPassword] = useState('');
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const initialFocusRef = useRef<HTMLElement | null>(null);
@@ -24,14 +27,76 @@ export default function AuthModal({ onClose }: Props) {
   const inputCls = 'w-full rounded-xl border-2 border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white px-3 py-2.5 font-semibold text-sm focus:outline-none focus:border-blue-500 transition-colors';
   const labelCls = 'block text-xs font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-1.5';
 
+  function failWith(message: string) {
+    setError(message);
+    announce(message, 'assertive');
+  }
+
   async function handleSubmit(e: { preventDefault(): void }) {
     e.preventDefault();
     setError('');
+    setInfo(null);
 
     if (tab === 'register') {
-      if (!name.trim()) { setError('Ad alanı zorunludur.'); announce('Ad alanı zorunludur.', 'assertive'); return; }
-      if (password !== confirm) { setError('Şifreler eşleşmiyor.'); announce('Şifreler eşleşmiyor.', 'assertive'); return; }
-      if (password.length < 6) { setError('Şifre en az 6 karakter olmalıdır.'); announce('Şifre en az 6 karakter olmalıdır.', 'assertive'); return; }
+      if (!name.trim()) return failWith('Ad alanı zorunludur.');
+      if (password !== confirm) return failWith('Şifreler eşleşmiyor.');
+      if (password.length < 10) return failWith('Şifre en az 10 karakter olmalıdır.');
+      if (!/\d/.test(password)) return failWith('Şifre en az bir rakam içermelidir.');
+    }
+
+    if (tab === 'forgot') {
+      if (!email) return failWith('Email zorunludur.');
+      setLoading(true);
+      try {
+        const res = await fetch('/api/auth/forgot-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) return failWith(data?.error ?? 'İstek başarısız.');
+        // Geliştirmede backend devToken döner; kullanıcı kolayca test edebilsin diye otomatik doldur.
+        if (data?.devToken) {
+          setResetToken(data.devToken);
+          setInfo('Geliştirme modunda token otomatik doldu — yeni şifrenizi girip onaylayın.');
+        } else {
+          setInfo('Eğer bu email kayıtlıysa sıfırlama bağlantısı gönderildi.');
+        }
+        announce('Şifre sıfırlama isteği gönderildi.', 'polite');
+        setTab('reset');
+      } catch {
+        failWith('Sunucuya ulaşılamadı.');
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    if (tab === 'reset') {
+      if (!resetToken) return failWith('Sıfırlama token gerekli.');
+      if (newPassword.length < 10) return failWith('Yeni şifre en az 10 karakter olmalı.');
+      if (!/\d/.test(newPassword)) return failWith('Yeni şifre en az bir rakam içermeli.');
+      setLoading(true);
+      try {
+        const res = await fetch('/api/auth/reset-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: resetToken, newPassword }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) return failWith(data?.error ?? 'Şifre sıfırlanamadı.');
+        setInfo('Şifreniz güncellendi. Şimdi giriş yapabilirsiniz.');
+        announce('Şifreniz güncellendi.', 'polite');
+        setTab('login');
+        setPassword('');
+        setNewPassword('');
+        setResetToken('');
+      } catch {
+        failWith('Sunucuya ulaşılamadı.');
+      } finally {
+        setLoading(false);
+      }
+      return;
     }
 
     setLoading(true);
@@ -41,8 +106,7 @@ export default function AuthModal({ onClose }: Props) {
       onClose();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Bir hata oluştu.';
-      setError(message);
-      announce(message, 'assertive');
+      failWith(message);
     } finally {
       setLoading(false);
     }
@@ -157,48 +221,52 @@ export default function AuthModal({ onClose }: Props) {
             </div>
           )}
 
-          <div>
-            <label htmlFor="auth-email" className={labelCls}>Email</label>
-            <input
-              id="auth-email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="ornek@email.com"
-              className={inputCls}
-              autoComplete="email"
-              required
-              aria-invalid={!!error}
-              aria-describedby={error ? errorId : undefined}
-            />
-          </div>
-
-          <div>
-            <label htmlFor="auth-password" className={labelCls}>Şifre</label>
-            <div className="relative">
+          {tab !== 'reset' && (
+            <div>
+              <label htmlFor="auth-email" className={labelCls}>Email</label>
               <input
-                id="auth-password"
-                type={showPass ? 'text' : 'password'}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder={tab === 'register' ? 'En az 6 karakter' : 'Şifreniz'}
-                className={`${inputCls} pr-10`}
-                autoComplete={tab === 'login' ? 'current-password' : 'new-password'}
+                id="auth-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="ornek@email.com"
+                className={inputCls}
+                autoComplete="email"
                 required
                 aria-invalid={!!error}
                 aria-describedby={error ? errorId : undefined}
               />
-              <button
-                type="button"
-                onClick={() => setShowPass((v) => !v)}
-                aria-label={showPass ? 'Şifreyi gizle' : 'Şifreyi göster'}
-                aria-pressed={showPass}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
-              >
-                {showPass ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
-              </button>
             </div>
-          </div>
+          )}
+
+          {(tab === 'login' || tab === 'register') && (
+            <div>
+              <label htmlFor="auth-password" className={labelCls}>Şifre</label>
+              <div className="relative">
+                <input
+                  id="auth-password"
+                  type={showPass ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder={tab === 'register' ? 'En az 10 karakter, 1 rakam' : 'Şifreniz'}
+                  className={`${inputCls} pr-10`}
+                  autoComplete={tab === 'login' ? 'current-password' : 'new-password'}
+                  required
+                  aria-invalid={!!error}
+                  aria-describedby={error ? errorId : undefined}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPass((v) => !v)}
+                  aria-label={showPass ? 'Şifreyi gizle' : 'Şifreyi göster'}
+                  aria-pressed={showPass}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                >
+                  {showPass ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
+                </button>
+              </div>
+            </div>
+          )}
 
           {tab === 'register' && (
             <div>
@@ -217,6 +285,41 @@ export default function AuthModal({ onClose }: Props) {
             </div>
           )}
 
+          {tab === 'reset' && (
+            <>
+              <div>
+                <label htmlFor="auth-reset-token" className={labelCls}>Sıfırlama Token</label>
+                <input
+                  id="auth-reset-token"
+                  type="text"
+                  value={resetToken}
+                  onChange={(e) => setResetToken(e.target.value)}
+                  placeholder="Email ile gelen token"
+                  className={inputCls}
+                  required
+                />
+              </div>
+              <div>
+                <label htmlFor="auth-new-password" className={labelCls}>Yeni Şifre</label>
+                <input
+                  id="auth-new-password"
+                  type={showPass ? 'text' : 'password'}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="En az 10 karakter, 1 rakam"
+                  className={inputCls}
+                  autoComplete="new-password"
+                  required
+                />
+              </div>
+            </>
+          )}
+
+          {info && (
+            <p role="status" className="text-sm font-bold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl px-3 py-2">
+              {info}
+            </p>
+          )}
           {error && (
             <p id={errorId} role="alert" className="text-sm font-bold text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl px-3 py-2">
               {error}
@@ -228,8 +331,57 @@ export default function AuthModal({ onClose }: Props) {
             disabled={loading}
             className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white rounded-xl font-black text-sm transition-colors"
           >
-            {loading ? 'Lütfen bekleyin...' : tab === 'login' ? 'Giriş Yap' : 'Hesap Oluştur'}
+            {loading
+              ? 'Lütfen bekleyin...'
+              : tab === 'login'
+                ? 'Giriş Yap'
+                : tab === 'register'
+                  ? 'Hesap Oluştur'
+                  : tab === 'forgot'
+                    ? 'Sıfırlama Bağlantısı Gönder'
+                    : 'Şifreyi Güncelle'}
           </button>
+
+          {tab === 'login' && (
+            <>
+              <button
+                type="button"
+                onClick={() => { setTab('forgot'); setError(''); setInfo(null); }}
+                className="block mx-auto text-xs font-black text-blue-700 dark:text-blue-300 hover:underline"
+              >
+                Şifremi unuttum
+              </button>
+              <button
+                type="button"
+                disabled={loading}
+                onClick={async () => {
+                  setError('');
+                  setInfo(null);
+                  setLoading(true);
+                  try {
+                    await signInAsDemo();
+                    onClose();
+                  } catch (err: unknown) {
+                    failWith(err instanceof Error ? err.message : 'Demo girişi başarısız.');
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+                className="w-full mt-2 py-2.5 rounded-xl border-2 border-blue-500 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/30 font-black text-sm transition-colors"
+              >
+                Hızlı Dene (Demo Hesap)
+              </button>
+            </>
+          )}
+          {(tab === 'forgot' || tab === 'reset') && (
+            <button
+              type="button"
+              onClick={() => { setTab('login'); setError(''); setInfo(null); }}
+              className="block mx-auto text-xs font-black text-slate-500 dark:text-slate-400 hover:underline"
+            >
+              ← Giriş ekranına dön
+            </button>
+          )}
         </form>
       </div>
     </div>

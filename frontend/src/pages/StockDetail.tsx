@@ -2,6 +2,10 @@ import { useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, RefreshCw, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import type { TechnicalPrediction } from '../../../backend/predictionEngine.ts';
+import { Skeleton } from '../components/Skeleton';
+import AlertPanel from '../components/AlertPanel';
+import PredictionHistory from '../components/PredictionHistory';
+import NewsSummaryButton from '../components/NewsSummaryButton';
 
 type MarketStock = {
   symbol: string;
@@ -24,12 +28,80 @@ type StockDetailProps = {
 const fmt = (n: number) =>
   n.toLocaleString('tr-TR', { style: 'currency', currency: 'TRY', maximumFractionDigits: 2 });
 
+/**
+ * Mini SVG sparkline. Boyutu container'a oranlanır (viewBox).
+ * Erişilebilirlik: sayısal özet aria-label olarak iletilir.
+ */
+function Sparkline({ values, color, width = 200, height = 48 }: {
+  values: number[];
+  color: string;
+  width?: number;
+  height?: number;
+}) {
+  if (!values || values.length < 2) return null;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const stepX = width / (values.length - 1);
+  const points = values
+    .map((v, i) => `${(i * stepX).toFixed(2)},${(height - ((v - min) / range) * height).toFixed(2)}`)
+    .join(' ');
+  const first = values[0];
+  const last = values[values.length - 1];
+  const pct = first > 0 ? (((last - first) / first) * 100).toFixed(1) : '0';
+  return (
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      width="100%"
+      height={height}
+      role="img"
+      aria-label={`Son ${values.length} günün fiyat hareketi: yüzde ${pct} değişim`}
+      preserveAspectRatio="none"
+    >
+      <polyline
+        points={points}
+        fill="none"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 export default function StockDetail({ stocks, predictions, predictLoading, predictUpdatedAt, onRefreshPrediction }: StockDetailProps) {
   const { symbol } = useParams();
   const symbolUpper = symbol?.toUpperCase() ?? '';
   const stock = stocks.find((s) => s.symbol === symbolUpper);
   const prediction = symbolUpper ? predictions[symbolUpper] : undefined;
   const [refreshBusy, setRefreshBusy] = useState(false);
+
+  const predictTimeText = useMemo(() => {
+    if (!predictUpdatedAt) return null;
+    return predictUpdatedAt.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }, [predictUpdatedAt]);
+
+  // Sembol watchlist'te yoksa: anlamlı not-found UI.
+  if (!stock) {
+    return (
+      <div className="p-6 max-w-2xl mx-auto text-center space-y-4" role="alert">
+        <p className="text-[11px] font-black uppercase tracking-widest text-slate-400">Bulunamadı</p>
+        <h1 className="text-3xl font-black text-slate-900 dark:text-white">
+          {symbolUpper || 'Hisse'} listemde yok
+        </h1>
+        <p className="text-slate-500 dark:text-slate-400">
+          Bu sembol BIST izleme listesinde değil ya da şu an alınamıyor.
+        </p>
+        <Link
+          to="/"
+          className="inline-block px-6 py-3 bg-blue-700 text-white font-black border-2 border-slate-900 dark:border-white rounded-xl"
+        >
+          Ana sayfaya dön
+        </Link>
+      </div>
+    );
+  }
 
   async function handleRefresh() {
     if (!symbolUpper) return;
@@ -42,11 +114,6 @@ export default function StockDetail({ stocks, predictions, predictLoading, predi
   const TrendIcon = prediction?.trend === 'Yukselis' ? TrendingUp : prediction?.trend === 'Dusuk seyir' ? TrendingDown : Minus;
   const trendColor = prediction?.trend === 'Yukselis' ? 'text-green-600' : prediction?.trend === 'Dusuk seyir' ? 'text-red-500' : 'text-slate-500';
   const labelCls = 'text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-1';
-
-  const predictTimeText = useMemo(() => {
-    if (!predictUpdatedAt) return null;
-    return predictUpdatedAt.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  }, [predictUpdatedAt]);
 
   return (
     <div className="p-4 md:p-6 flex flex-col gap-5" id="page-content" data-page="stock-detail">
@@ -69,11 +136,28 @@ export default function StockDetail({ stocks, predictions, predictLoading, predi
         <div className="col-span-2 md:col-span-1 bg-slate-900 dark:bg-slate-800 rounded-2xl p-5">
           <p className={`${labelCls} text-slate-500`}>Güncel Fiyat</p>
           <p className="text-3xl font-black text-white tracking-tight">
-            {fmt(stock?.price ?? 0)}
+            {fmt(stock.price)}
           </p>
           <p className={`text-sm font-black mt-1 ${up ? 'text-green-400' : 'text-red-400'}`}>
-            {up ? '+' : ''}%{(stock?.dailyChangePercent ?? 0).toFixed(2)} bugün
+            {up ? '+' : ''}%{stock.dailyChangePercent.toFixed(2)} bugün
           </p>
+          {prediction?.recentCloses && prediction.recentCloses.length >= 2 && (
+            <div className="mt-3 -mx-1">
+              <Sparkline
+                values={prediction.recentCloses}
+                color={up ? '#34d399' : '#f87171'}
+                height={42}
+              />
+              <p className="text-[10px] font-bold text-slate-500 mt-1">
+                Son {prediction.recentCloses.length} işlem günü
+              </p>
+            </div>
+          )}
+          {!prediction?.recentCloses && (
+            <div className="mt-3">
+              <Skeleton height="42px" rounded="md" label="Grafik yükleniyor" />
+            </div>
+          )}
         </div>
 
         {/* Piyasa Değeri */}
@@ -247,6 +331,15 @@ export default function StockDetail({ stocks, predictions, predictLoading, predi
           </div>
         )}
       </div>
+
+      {/* Sesli haber özeti */}
+      <NewsSummaryButton symbol={stock.symbol} name={stock.name} />
+
+      {/* Alarm paneli */}
+      <AlertPanel stocks={stocks} symbol={symbolUpper} />
+
+      {/* Tahmin geçmişi */}
+      <PredictionHistory symbol={symbolUpper} />
 
       {/* Veri kaynağı */}
       {stock?.source && (

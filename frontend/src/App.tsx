@@ -3,12 +3,15 @@ import GlobalAssistant, { type VoiceCommandHandler } from './components/GlobalAs
 import CommandPalette from './components/CommandPalette';
 import AccessibilityTour from './components/AccessibilityTour';
 import AccessibleShell from './components/AccessibleShell';
+import SymbolSearch from './components/SymbolSearch';
 import Home from './pages/Home';
 import Dashboard from './pages/Dashboard';
 import StockDetail from './pages/StockDetail';
 import Profile from './pages/Profile';
+import Compare from './pages/Compare';
+import Shortcuts from './pages/Shortcuts';
 import AuthModal from './components/AuthModal';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Moon, Sun, User, LogIn, Command } from 'lucide-react';
 import { useAuth } from './contexts/AuthContext.tsx';
 import { useStocksQuotes } from './hooks/useStocksQuotes';
@@ -27,6 +30,7 @@ import {
   type CommandItem,
 } from './hooks/accessibilityConfig';
 import { useAccessibilitySettings } from './hooks/useAccessibilitySettings.tsx';
+import { useI18n } from './hooks/useI18n.tsx';
 import { APP_EVENTS } from './hooks/appEvents';
 
 const ROUTE_TITLES: Record<string, string> = {
@@ -201,6 +205,23 @@ function buildHoldingsSpeech(portfolio: PortfolioApi, stocks: MarketStock[], con
   );
 }
 
+function NotFoundPage() {
+  return (
+    <div role="alert" className="max-w-2xl mx-auto py-16 px-4 text-center space-y-4">
+      <h1 className="text-4xl font-black">404 — Sayfa bulunamadı</h1>
+      <p className="text-lg text-slate-600 dark:text-slate-300">
+        Aradığınız sayfa taşınmış ya da hiç var olmamış olabilir.
+      </p>
+      <Link
+        to="/"
+        className="inline-block px-6 py-3 bg-blue-700 text-white font-black border-2 border-slate-900 dark:border-white"
+      >
+        Ana sayfaya dön
+      </Link>
+    </div>
+  );
+}
+
 export default function App() {
   return (
     <Router>
@@ -216,6 +237,7 @@ function AppShell() {
   const {
     conciseMode,
     shortcuts,
+    onboardingSeen,
     setOnboardingSeen,
     setConciseMode,
     setShortcut,
@@ -252,10 +274,26 @@ function AppShell() {
   useEffect(() => {
     function onRestart() {
       setOnboardingSeen(false);
+      localStorage.removeItem('finto_a11y_hint_shown');
     }
     window.addEventListener(APP_EVENTS.onboardingRestart, onRestart);
     return () => window.removeEventListener(APP_EVENTS.onboardingRestart, onRestart);
   }, [setOnboardingSeen]);
+
+  // İlk ziyarette ekran okuyucu kullanıcıya sade görünümün varlığını duyur.
+  // Sayfa başlığı duyurusunun üstüne binmesin diye küçük bir gecikme.
+  useEffect(() => {
+    if (onboardingSeen || accessibleMode) return;
+    if (localStorage.getItem('finto_a11y_hint_shown') === '1') return;
+    const t = setTimeout(() => {
+      announce(
+        `Finto'ya hoş geldiniz. Görme engelliler için sade görünüm: ${formatShortcut(shortcuts.toggleAccessibleMode)}.`,
+        'polite',
+      );
+      localStorage.setItem('finto_a11y_hint_shown', '1');
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [onboardingSeen, accessibleMode, announce, shortcuts]);
 
   const [showAuthModal, setShowAuthModal] = useState(false);
 
@@ -326,14 +364,42 @@ function AppShell() {
     [announce, closeTopLayer, handleReadPage, navigate, shortcuts, toggleAccessibleMode],
   );
 
+  // Bekleyen satış onayı: kullanıcı "sat" deyince hemen yapmıyoruz; "evet" beklenir.
+  // 15 sn içinde onay/red gelmezse otomatik iptal.
+  const pendingSellRef = useRef<{ symbol: string; quantity: number; expires: number } | null>(null);
+
   // Sesli komut → yerel intent
   const handleVoiceCommand = useCallback<VoiceCommandHandler>(
     async (text) => {
+      // Önce bekleyen satış onayını kontrol et — kullanıcının her cümlesi
+      // önce "sat onayı mı?" diye değerlendirilir.
+      const pending = pendingSellRef.current;
+      if (pending) {
+        const expired = Date.now() > pending.expires;
+        pendingSellRef.current = null;
+        if (expired) {
+          return { handled: true, reply: 'Satış onayı zaman aşımına uğradı, iptal edildi.' };
+        }
+        const t = text.toLowerCase().trim();
+        if (/^(evet|onayl[ıi]yorum|onayla|tamam|olur|yap)\b/.test(t)) {
+          const res = await portfolio.sellStock(pending.symbol, pending.quantity);
+          return { handled: true, reply: res.message };
+        }
+        if (/^(hay[ıi]r|iptal|vazge[çc]|durdur|olmaz)\b/.test(t)) {
+          return { handled: true, reply: 'Satış iptal edildi.' };
+        }
+        // Anlamadık → iptal sayıp normal akışa geç (kullanıcı yeni komut vermiş olabilir).
+      }
+
       const intent = parseVoiceCommand(text, BIST_SYMBOLS);
       if (!intent) return { handled: false };
 
       if (intent.type === 'help') {
         return { handled: true, reply: getGlobalHint(shortcuts) };
+      }
+      if (intent.type === 'open-assistant') {
+        window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantToggle));
+        return { handled: true, reply: 'Asistan açılıyor.' };
       }
       if (intent.type === 'close-assistant') {
         window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantClose));
@@ -379,8 +445,15 @@ function AppShell() {
         return { handled: true, reply: res.message };
       }
       if (intent.type === 'sell') {
-        const res = await portfolio.sellStock(intent.symbol, intent.quantity);
-        return { handled: true, reply: res.message };
+        pendingSellRef.current = {
+          symbol: intent.symbol,
+          quantity: intent.quantity,
+          expires: Date.now() + 15_000,
+        };
+        return {
+          handled: true,
+          reply: `${intent.quantity} lot ${intent.symbol} satışını onaylıyor musunuz? Evet ya da hayır deyin.`,
+        };
       }
       if (intent.type === 'list-stocks') {
         return { handled: true, reply: buildStocksSpeech(stocks, intent.count ?? 5) };
@@ -456,6 +529,7 @@ function AppShell() {
   );
 
   const { user } = useAuth();
+  const { locale, setLocale, t } = useI18n();
 
   if (accessibleMode) {
     return (
@@ -473,7 +547,7 @@ function AppShell() {
           onRunCommand={runCommand}
           onClose={() => setIsCommandPaletteOpen(false)}
         />
-        <GlobalAssistant onVoiceCommand={handleVoiceCommand} shortcuts={shortcuts} />
+        <GlobalAssistant onVoiceCommand={handleVoiceCommand} shortcuts={shortcuts} concise />
       </>
     );
   }
@@ -496,9 +570,19 @@ function AppShell() {
             </Link>
             <div className="flex items-center gap-3">
               <nav className="hidden md:flex gap-2 font-semibold text-slate-600 dark:text-slate-300">
-                <Link to="/" className="px-3 py-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-slate-800 hover:text-blue-700 dark:hover:text-blue-300 transition-colors">Ana Sayfa</Link>
-                <Link to="/portfolio" className="px-3 py-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-slate-800 hover:text-blue-700 dark:hover:text-blue-300 transition-colors">Portföyüm</Link>
+                <Link to="/" className="px-3 py-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-slate-800 hover:text-blue-700 dark:hover:text-blue-300 transition-colors">{t('nav.home')}</Link>
+                <Link to="/portfolio" className="px-3 py-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-slate-800 hover:text-blue-700 dark:hover:text-blue-300 transition-colors">{t('nav.portfolio')}</Link>
+                <Link to="/compare" className="px-3 py-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-slate-800 hover:text-blue-700 dark:hover:text-blue-300 transition-colors">{t('nav.compare')}</Link>
               </nav>
+              <SymbolSearch />
+              <button
+                onClick={() => setLocale(locale === 'tr' ? 'en' : 'tr')}
+                className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-black text-slate-700 dark:text-slate-200 transition-colors"
+                aria-label={t('common.lang')}
+                title={t('common.lang')}
+              >
+                {locale.toUpperCase()}
+              </button>
               <button
                 onClick={() => setIsCommandPaletteOpen(true)}
                 className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-200 transition-colors"
@@ -679,10 +763,22 @@ function AppShell() {
                 />
               }
             />
+            <Route
+              path="/compare"
+              element={
+                <Compare
+                  stocks={stocks}
+                  predictions={predictions}
+                  onRefreshPrediction={(symbol) => loadPredictions([symbol], { quiet: true })}
+                />
+              }
+            />
+            <Route path="/shortcuts" element={<Shortcuts />} />
+            <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </main>
 
-      <GlobalAssistant onVoiceCommand={handleVoiceCommand} shortcuts={shortcuts} />
+      <GlobalAssistant onVoiceCommand={handleVoiceCommand} shortcuts={shortcuts} concise={conciseMode} />
     </div>
   );
 }

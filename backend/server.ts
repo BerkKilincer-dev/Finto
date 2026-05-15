@@ -1,12 +1,18 @@
 import 'dotenv/config';
 import express from 'express';
 import cookieParser from 'cookie-parser';
+import helmet from 'helmet';
+import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { BIST_SYMBOLS } from '../frontend/src/data/bistWatchlist.ts';
 import { buildTechnicalPrediction, type OHLCV } from './predictionEngine.ts';
 import authRouter from './auth.ts';
 import portfolioRouter from './portfolio.ts';
+import alertsRouter from './alerts.ts';
+import db from './db.ts';
+import { randomUUID } from 'crypto';
 import { fetchYahooChart, mapInChunks } from './yahooClient.ts';
 
 type YahooChartMeta = {
@@ -55,10 +61,59 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3001;
 
-  app.use(express.json());
+  // ─── Güvenlik middleware'leri ─────────────────────────────────────
+  // helmet'in CSP'si Vite HMR'ı bozar; dev'de kapatıyoruz.
+  app.use(
+    helmet({
+      contentSecurityPolicy: process.env.NODE_ENV === 'production' ? undefined : false,
+      crossOriginEmbedderPolicy: false,
+    }),
+  );
+  // CORS — same-origin (frontend Express ile aynı portta servis ediliyor) ama
+  // farklı bir host'tan da çağrılırsa diye APP_URL allow-list olarak duruyor.
+  const APP_URL = process.env.APP_URL || `http://localhost:${PORT}`;
+  app.use(
+    cors({
+      origin: [APP_URL, `http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`],
+      credentials: true,
+    }),
+  );
+
+  // Genel API rate limit: dakikada IP başına 300 istek (canlı fiyat polling için bol).
+  const generalLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Çok fazla istek. Bir dakika bekleyin.' },
+  });
+  app.use('/api', generalLimiter);
+
+  app.use(express.json({ limit: '100kb' }));
   app.use(cookieParser());
+
+  // Sağlık endpoint'i — yük dengeleyici / monitoring için.
+  app.get('/api/health', (_req, res) => {
+    res.json({
+      status: 'ok',
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString(),
+    });
+  });
+
   app.use('/api/auth', authRouter);
   app.use('/api/portfolio', portfolioRouter);
+  app.use('/api/alerts', alertsRouter);
+
+  // Tahmin geçmişi: bir sembol için son N gün (varsayılan 30).
+  app.get('/api/predictions/:symbol/history', (req, res) => {
+    const symbol = String(req.params.symbol || '').toUpperCase();
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 30));
+    const rows = db.prepare(
+      'SELECT id, symbol, trend, score, target_price, target_low, target_high, snapshot_price, created_at FROM prediction_history WHERE symbol = ? ORDER BY created_at DESC LIMIT ?',
+    ).all(symbol, limit);
+    res.json({ history: rows });
+  });
 
   app.get('/api/stocks/quotes', async (_req, res) => {
     try {
@@ -174,6 +229,37 @@ async function startServer() {
         if (entry) {
           predictions[entry[0]] = entry[1];
         }
+      }
+
+      // Günde en fazla 1 kez geçmiş snapshot'ı yaz (sembol başına).
+      try {
+        const ONE_DAY = 24 * 60 * 60;
+        const now = Math.floor(Date.now() / 1000);
+        const insertStmt = db.prepare(
+          'INSERT INTO prediction_history (id, symbol, trend, score, target_price, target_low, target_high, horizon, snapshot_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        );
+        const checkStmt = db.prepare(
+          'SELECT created_at FROM prediction_history WHERE symbol = ? ORDER BY created_at DESC LIMIT 1',
+        );
+        for (const [sym, p] of Object.entries(predictions)) {
+          const last = checkStmt.get(sym) as { created_at: number } | undefined;
+          if (last && now - last.created_at < ONE_DAY) continue;
+          const stock = entries.find((e) => e && e[0] === sym);
+          const snapshotPrice = stock ? stock[1].targetPrice : p.targetPrice; // fallback
+          insertStmt.run(
+            randomUUID(),
+            sym,
+            p.trend,
+            p.score,
+            p.targetPrice,
+            p.targetPriceLow,
+            p.targetPriceHigh,
+            p.horizon,
+            snapshotPrice,
+          );
+        }
+      } catch (e) {
+        console.warn('[prediction-history] yazılamadı:', e);
       }
 
       res.json({

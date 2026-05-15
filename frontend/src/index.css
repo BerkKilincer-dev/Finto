@@ -117,3 +117,24 @@ body {
 .dark :focus-visible {
   outline-color: #60a5fa;
 }
+
+/* Dark mod kontrast düzeltmeleri — WCAG AA için.
+   text-slate-400/500 koyu zeminde 4.5:1 kontrast altına düşebiliyor; minimum 380 yap. */
+.dark .text-slate-400 {
+  color: rgb(148 163 184);
+}
+.dark .text-slate-500 {
+  color: rgb(148 163 184);
+}
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: rgb(148 163 184);
+  opacity: 1;
+}
+/* Dark zeminde nötr border'lar yeterli görünmüyor — tutarlı yumuşat. */
+.dark .border-slate-100 {
+  border-color: rgb(51 65 85);
+}
+.dark .border-slate-200 {
+  border-color: rgb(51 65 85);
+}

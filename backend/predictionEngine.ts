@@ -54,6 +54,8 @@ export type TechnicalPrediction = {
   lookbackTradingDays: number;
   /** Siniflandirmada kullanilan esik (mutlak skor) */
   trendThresholdUsed: number;
+  /** Son ~30 günlük kapanış serisi — frontend mini sparkline için. */
+  recentCloses: number[];
 };
 
 const W_TREND_GROUP = 0.54;
@@ -477,6 +479,7 @@ export function buildTechnicalPrediction(symbol: string, currentPrice: number, b
       atr14PercentOfPrice: null,
       lookbackTradingDays: 0,
       trendThresholdUsed: threshold,
+      recentCloses: bars.map((b) => b.c).slice(-30),
     };
   }
 
@@ -548,5 +551,6 @@ export function buildTechnicalPrediction(symbol: string, currentPrice: number, b
     atr14PercentOfPrice: atrPct !== null ? Number((atrPct * 100).toFixed(3)) : null,
     lookbackTradingDays: sliced.length,
     trendThresholdUsed: threshold,
+    recentCloses: closes.slice(-30),
   };
 }

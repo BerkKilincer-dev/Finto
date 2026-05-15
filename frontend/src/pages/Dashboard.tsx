@@ -4,6 +4,7 @@ import type { TechnicalPrediction } from '../../../backend/predictionEngine.ts';
 import { Search, TrendingUp, TrendingDown, Minus, ArrowUpRight } from 'lucide-react';
 import { useAnnouncer } from '../hooks/useAnnouncer.tsx';
 import { APP_EVENTS } from '../hooks/appEvents';
+import SectorBreakdown from '../components/SectorBreakdown';
 
 type MarketStock = {
   symbol: string;
@@ -286,6 +287,9 @@ export default function Dashboard({
 
   return (
     <div className="p-4 md:p-6 flex flex-col gap-5" id="page-content" data-page="portfolio">
+
+      {/* Sektör dağılımı */}
+      {holdings.length > 0 && <SectorBreakdown holdings={holdings} stocks={allStocks} />}
 
       {/* Onay Modal */}
       {confirmModal && (

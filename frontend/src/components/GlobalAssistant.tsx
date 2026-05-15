@@ -25,6 +25,8 @@ type GlobalAssistantProps = {
   /** Sesli komutu yerel olarak işleme şansı verir. handled=true ise AI'ya gönderme. */
   onVoiceCommand?: VoiceCommandHandler;
   shortcuts?: ShortcutMap;
+  /** Backend'e "kısa yanıt ver" sinyali gönderir (erişilebilir mod / concise tercihi). */
+  concise?: boolean;
 };
 
 type VoiceConfig = {
@@ -61,7 +63,7 @@ const extractPageContext = () => {
   return el ? el.innerText.slice(0, 2000) : null;
 };
 
-export default function GlobalAssistant({ onVoiceCommand, shortcuts }: GlobalAssistantProps = {}) {
+export default function GlobalAssistant({ onVoiceCommand, shortcuts, concise = false }: GlobalAssistantProps = {}) {
   const location = useLocation();
   const { announce } = useAnnouncer();
   const {
@@ -170,6 +172,7 @@ export default function GlobalAssistant({ onVoiceCommand, shortcuts }: GlobalAss
             query: trimmed,
             path: locationPathRef.current,
             context: extractPageContext(),
+            concise,
           }),
         );
 
