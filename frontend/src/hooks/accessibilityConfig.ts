@@ -4,7 +4,8 @@ export type ShortcutActionId =
   | 'readPage'
   | 'openCommandPalette'
   | 'closeTopLayer'
-  | 'toggleAccessibleMode';
+  | 'toggleAccessibleMode'
+  | 'announceFeatures';
 
 export type ShortcutSpec = {
   key: string;
@@ -23,6 +24,7 @@ export const DEFAULT_SHORTCUTS: ShortcutMap = {
   openCommandPalette: { alt: true, key: 'k' },
   closeTopLayer: { key: 'Escape' },
   toggleAccessibleMode: { alt: true, key: 'e' },
+  announceFeatures: { alt: true, key: 't' },
 };
 
 function normalizeKeyName(raw: string): string {
@@ -91,7 +93,8 @@ export type CommandItem = {
     | 'go-profile'
     | 'close-layer'
     | 'shortcut-help'
-    | 'toggle-accessible-mode';
+    | 'toggle-accessible-mode'
+    | 'announce-features';
   title: string;
   description: string;
   shortcutActionId?: ShortcutActionId;
@@ -152,6 +155,13 @@ export const COMMAND_ITEMS: CommandItem[] = [
     voiceExamples: ['yardım', 'kısayollar'],
   },
   {
+    id: 'announce-features',
+    title: 'Tüm özellikleri tanıt',
+    description: 'Görme engelli kullanıcılar için tüm temel özellikleri sesli özetler.',
+    shortcutActionId: 'announceFeatures',
+    voiceExamples: ['özellikleri anlat', 'neler yapabilirim'],
+  },
+  {
     id: 'toggle-accessible-mode',
     title: 'Erişilebilir modu aç / kapat',
     description: 'Sade, liste tabanlı erişilebilir arayüze geçer veya normale döner.',
@@ -167,7 +177,7 @@ export function getGlobalHint(shortcuts: ShortcutMap): string {
     `${formatShortcut(shortcuts.readPage)} sayfayı oku, ` +
     `${formatShortcut(shortcuts.openCommandPalette)} komut paleti, ` +
     `${formatShortcut(shortcuts.toggleAccessibleMode)} erişilebilir mod, ` +
-    `${formatShortcut(shortcuts.closeTopLayer)} kapat. ` +
-    'Navigasyon için Shift+G sonra: H ana sayfa, P portföy, R profil.'
+    `${formatShortcut(shortcuts.announceFeatures)} özellikleri anlat, ` +
+    `${formatShortcut(shortcuts.closeTopLayer)} kapat.`
   );
 }

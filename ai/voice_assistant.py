@@ -111,14 +111,21 @@ async def handle(ws: ServerConnection):
     # Aktif Gemini sorgusunun task'i — yeni sorgu gelince eskisini cancel ederiz.
     current_task: asyncio.Task | None = None
 
-    async def run_query(query: str, current_path: str, page_context: str, concise: bool):
+    async def run_query(query: str, current_path: str, page_context: str, concise: bool, ui_mode: str):
         """Tek bir sorguyu Gemini'ye gönderip stream'i ws'a aktarır."""
+        mode_label = "Erisilebilir Sesli Mod" if ui_mode == "accessible" else "Standart Arayuz"
         system_with_context = (
             f"{SYSTEM_PROMPT}\n\n"
             f"ŞU ANKİ BAĞLAM:\n"
+            f"- Aktif Arayüz Modu: {mode_label}\n"
             f"- Kullanıcının Bulunduğu Sayfa: {current_path or 'Bilinmiyor'}\n"
             f"- Sayfadaki Aktif Veri: {page_context or 'Veri Yok'}"
         )
+        if ui_mode == "accessible":
+            system_with_context += (
+                "\n- Kullanıcı erişilebilir sesli kabukta. Yanıtı kısa, doğrudan ve sayısal özet odaklı ver. "
+                "Gerekirse önce nakit, toplam varlık ve pozisyon detayını söyle."
+            )
         if concise:
             system_with_context += CONCISE_RULE
 
@@ -225,6 +232,9 @@ async def handle(ws: ServerConnection):
             current_path = data.get("path", "")
             page_context = data.get("context", "")
             concise = bool(data.get("concise", False))
+            ui_mode = str(data.get("uiMode", "standard") or "standard").lower()
+            if ui_mode not in {"standard", "accessible"}:
+                ui_mode = "standard"
 
             if not query:
                 await ws.send(json.dumps({"type": "error", "message": "Sorgu boş olamaz."}, ensure_ascii=False))
@@ -239,7 +249,7 @@ async def handle(ws: ServerConnection):
                     pass
 
             current_task = asyncio.create_task(
-                run_query(query, current_path, page_context, concise)
+                run_query(query, current_path, page_context, concise, ui_mode)
             )
             # Burada await ETME — task arka planda çalışsın, biz yeni mesajları
             # dinlemeye devam edelim ki abort/yeni-sorgu anında işlensin.

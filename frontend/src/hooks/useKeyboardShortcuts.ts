@@ -1,5 +1,4 @@
-import { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useRef } from 'react';
 import { getGlobalHint, matchesShortcut, type ShortcutMap } from './accessibilityConfig';
 
 export type ShortcutHandlers = {
@@ -11,6 +10,8 @@ export type ShortcutHandlers = {
   onReadPage?: () => void;
   /** Erişilebilir mod aç/kapat */
   onToggleAccessibleMode?: () => void;
+  /** Tüm erişilebilirlik özelliklerini sesli tanıt */
+  onAnnounceFeatures?: () => void;
 };
 
 /**
@@ -21,8 +22,8 @@ export type ShortcutHandlers = {
  * - Alt+M: mikrofonu açıp dinlemeye başla
  * - Alt+O: aktif sayfanın içeriğini sesli okut ("oku")
  * - Alt+K: komut paletini aç
+ * - Alt+T: tüm özellikleri sesli tanıt
  * - Escape: en üstteki modal/panel kapat
- * - Shift+G sonra H/P/R: ana sayfa / portföy / profil
  * - Shift+? : kısayolları sesli duyur
  */
 export function useKeyboardShortcuts(
@@ -30,20 +31,23 @@ export function useKeyboardShortcuts(
   shortcuts: ShortcutMap,
   announce?: (msg: string) => void,
 ) {
-  const navigate = useNavigate();
+  const handlersRef = useRef(handlers);
+  const shortcutsRef = useRef(shortcuts);
+  const announceRef = useRef(announce);
 
   useEffect(() => {
-    let gPrefixActive = false;
-    let gPrefixTimer: ReturnType<typeof setTimeout> | null = null;
+    handlersRef.current = handlers;
+  }, [handlers]);
 
-    function clearGPrefix() {
-      gPrefixActive = false;
-      if (gPrefixTimer) {
-        clearTimeout(gPrefixTimer);
-        gPrefixTimer = null;
-      }
-    }
+  useEffect(() => {
+    shortcutsRef.current = shortcuts;
+  }, [shortcuts]);
 
+  useEffect(() => {
+    announceRef.current = announce;
+  }, [announce]);
+
+  useEffect(() => {
     function isTypingInField(target: EventTarget | null): boolean {
       if (!(target instanceof HTMLElement)) return false;
       const tag = target.tagName;
@@ -53,35 +57,44 @@ export function useKeyboardShortcuts(
     }
 
     function handler(e: KeyboardEvent) {
+      const currentHandlers = handlersRef.current;
+      const currentShortcuts = shortcutsRef.current;
+      const currentAnnounce = announceRef.current;
+
       // Form alanında yazarken kısayolları devre dışı bırak (Alt'lı olanlar hariç).
       const typing = isTypingInField(e.target);
 
-      if (matchesShortcut(e, shortcuts.toggleAssistant)) {
+      if (matchesShortcut(e, currentShortcuts.toggleAssistant)) {
         e.preventDefault();
-        handlers.onToggleAssistant?.();
-        announce?.('Asistan paneli');
+        currentHandlers.onToggleAssistant?.();
+        currentAnnounce?.('Asistan paneli');
         return;
       }
-      if (matchesShortcut(e, shortcuts.startListening)) {
+      if (matchesShortcut(e, currentShortcuts.startListening)) {
         e.preventDefault();
-        handlers.onStartListening?.();
-        announce?.('Mikrofon');
+        currentHandlers.onStartListening?.();
+        currentAnnounce?.('Mikrofon');
         return;
       }
-      if (matchesShortcut(e, shortcuts.readPage)) {
+      if (matchesShortcut(e, currentShortcuts.readPage)) {
         e.preventDefault();
-        handlers.onReadPage?.();
+        currentHandlers.onReadPage?.();
         return;
       }
-      if (matchesShortcut(e, shortcuts.openCommandPalette)) {
+      if (matchesShortcut(e, currentShortcuts.openCommandPalette)) {
         e.preventDefault();
-        handlers.onOpenCommandPalette?.();
-        announce?.('Komut paleti');
+        currentHandlers.onOpenCommandPalette?.();
+        currentAnnounce?.('Komut paleti');
         return;
       }
-      if (matchesShortcut(e, shortcuts.toggleAccessibleMode)) {
+      if (matchesShortcut(e, currentShortcuts.toggleAccessibleMode)) {
         e.preventDefault();
-        handlers.onToggleAccessibleMode?.();
+        currentHandlers.onToggleAccessibleMode?.();
+        return;
+      }
+      if (matchesShortcut(e, currentShortcuts.announceFeatures)) {
+        e.preventDefault();
+        currentHandlers.onAnnounceFeatures?.();
         return;
       }
 
@@ -89,56 +102,22 @@ export function useKeyboardShortcuts(
       if (typing) return;
 
       // Escape: en üstteki layer
-      if (matchesShortcut(e, shortcuts.closeTopLayer)) {
-        handlers.onCloseTopLayer?.();
+      if (matchesShortcut(e, currentShortcuts.closeTopLayer)) {
+        currentHandlers.onCloseTopLayer?.();
         return;
       }
 
       // Shift+? : kısayol listesi
       if (e.key === '?' && e.shiftKey) {
         e.preventDefault();
-        announce?.(getGlobalHint(shortcuts));
+        currentAnnounce?.(getGlobalHint(currentShortcuts));
         return;
-      }
-
-      // g prefix navigasyon: Shift+G, sonra h/p/r
-      if (e.key === 'G' && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
-        e.preventDefault();
-        gPrefixActive = true;
-        if (gPrefixTimer) clearTimeout(gPrefixTimer);
-        gPrefixTimer = setTimeout(clearGPrefix, 1500);
-        announce?.('Navigasyon: H ana sayfa, P portföy, R profil');
-        return;
-      }
-      if (gPrefixActive) {
-        const k = e.key.toLowerCase();
-        if (k === 'h') {
-          e.preventDefault();
-          clearGPrefix();
-          navigate('/');
-          return;
-        }
-        if (k === 'p') {
-          e.preventDefault();
-          clearGPrefix();
-          navigate('/portfolio');
-          return;
-        }
-        if (k === 'r') {
-          e.preventDefault();
-          clearGPrefix();
-          navigate('/profile');
-          return;
-        }
-        // Geçersiz tuş: prefix'i sıfırla
-        clearGPrefix();
       }
     }
 
     window.addEventListener('keydown', handler);
     return () => {
       window.removeEventListener('keydown', handler);
-      clearGPrefix();
     };
-  }, [handlers, shortcuts, announce, navigate]);
+  }, []);
 }

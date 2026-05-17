@@ -23,9 +23,26 @@ export default function AuthModal({ onClose }: Props) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const initialFocusRef = useRef<HTMLElement | null>(null);
+  const lastSpokenRef = useRef<{ text: string; at: number }>({ text: '', at: 0 });
 
   const inputCls = 'w-full rounded-xl border-2 border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white px-3 py-2.5 font-semibold text-sm focus:outline-none focus:border-blue-500 transition-colors';
   const labelCls = 'block text-xs font-black uppercase tracking-widest text-slate-400 dark:text-slate-500 mb-1.5';
+
+  function speakNow(text: string) {
+    const now = Date.now();
+    // Çok hızlı tab geçişlerinde aynı anonsu üst üste tekrar etme.
+    if (lastSpokenRef.current.text === text && now - lastSpokenRef.current.at < 900) return;
+    lastSpokenRef.current = { text, at: now };
+
+    // 1) Screen reader hattı (aria-live)
+    announce(text, 'polite');
+    // 2) TTS hattı (screen reader olmasa da duyulsun)
+    window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantSpeak, { detail: { text } }));
+  }
+
+  function announceFocus(area: string) {
+    speakNow(`Şimdi ${area} alanındasınız.`);
+  }
 
   function failWith(message: string) {
     setError(message);
@@ -183,6 +200,7 @@ export default function AuthModal({ onClose }: Props) {
             <button
               role="tab"
               aria-selected={tab === 'login'}
+              onFocus={() => announceFocus('giriş sekmesi')}
               onClick={() => { setTab('login'); setError(''); announce('Giriş sekmesi seçildi.', 'polite'); }}
               className={`px-4 py-1.5 rounded-lg text-sm font-black transition-colors ${tab === 'login' ? 'bg-white dark:bg-slate-600 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-slate-400'}`}
             >
@@ -191,13 +209,20 @@ export default function AuthModal({ onClose }: Props) {
             <button
               role="tab"
               aria-selected={tab === 'register'}
+              onFocus={() => announceFocus('kayıt sekmesi')}
               onClick={() => { setTab('register'); setError(''); announce('Kayıt sekmesi seçildi.', 'polite'); }}
               className={`px-4 py-1.5 rounded-lg text-sm font-black transition-colors ${tab === 'register' ? 'bg-white dark:bg-slate-600 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-slate-400'}`}
             >
               Kayıt Ol
             </button>
           </div>
-          <button ref={closeButtonRef} onClick={onClose} aria-label="Kapat" className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors">
+          <button
+            ref={closeButtonRef}
+            onFocus={() => announceFocus('kapatma')}
+            onClick={onClose}
+            aria-label="Kapat"
+            className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
+          >
             <X size={18} aria-hidden="true" />
           </button>
         </div>
@@ -212,6 +237,7 @@ export default function AuthModal({ onClose }: Props) {
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                onFocus={() => announceFocus('ad soyad')}
                 placeholder="Adınız"
                 className={inputCls}
                 autoComplete="name"
@@ -229,6 +255,7 @@ export default function AuthModal({ onClose }: Props) {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                onFocus={() => announceFocus('email')}
                 placeholder="ornek@email.com"
                 className={inputCls}
                 autoComplete="email"
@@ -248,6 +275,7 @@ export default function AuthModal({ onClose }: Props) {
                   type={showPass ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                  onFocus={() => announceFocus('şifre')}
                   placeholder={tab === 'register' ? 'En az 10 karakter, 1 rakam' : 'Şifreniz'}
                   className={`${inputCls} pr-10`}
                   autoComplete={tab === 'login' ? 'current-password' : 'new-password'}
@@ -258,6 +286,7 @@ export default function AuthModal({ onClose }: Props) {
                 <button
                   type="button"
                   onClick={() => setShowPass((v) => !v)}
+                  onFocus={() => announceFocus('şifreyi göster gizle')}
                   aria-label={showPass ? 'Şifreyi gizle' : 'Şifreyi göster'}
                   aria-pressed={showPass}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
@@ -276,6 +305,7 @@ export default function AuthModal({ onClose }: Props) {
                 type={showPass ? 'text' : 'password'}
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
+                onFocus={() => announceFocus('şifre tekrar')}
                 placeholder="Şifrenizi tekrar girin"
                 className={inputCls}
                 autoComplete="new-password"
@@ -294,6 +324,7 @@ export default function AuthModal({ onClose }: Props) {
                   type="text"
                   value={resetToken}
                   onChange={(e) => setResetToken(e.target.value)}
+                  onFocus={() => announceFocus('sıfırlama tokenı')}
                   placeholder="Email ile gelen token"
                   className={inputCls}
                   required
@@ -306,6 +337,7 @@ export default function AuthModal({ onClose }: Props) {
                   type={showPass ? 'text' : 'password'}
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
+                  onFocus={() => announceFocus('yeni şifre')}
                   placeholder="En az 10 karakter, 1 rakam"
                   className={inputCls}
                   autoComplete="new-password"
@@ -329,6 +361,17 @@ export default function AuthModal({ onClose }: Props) {
           <button
             type="submit"
             disabled={loading}
+            onFocus={() =>
+              announceFocus(
+                tab === 'login'
+                  ? 'giriş yap butonu'
+                  : tab === 'register'
+                    ? 'hesap oluştur butonu'
+                    : tab === 'forgot'
+                      ? 'sıfırlama bağlantısı gönder butonu'
+                      : 'şifreyi güncelle butonu',
+              )
+            }
             className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white rounded-xl font-black text-sm transition-colors"
           >
             {loading
@@ -346,6 +389,7 @@ export default function AuthModal({ onClose }: Props) {
             <>
               <button
                 type="button"
+                onFocus={() => announceFocus('şifremi unuttum')}
                 onClick={() => { setTab('forgot'); setError(''); setInfo(null); }}
                 className="block mx-auto text-xs font-black text-blue-700 dark:text-blue-300 hover:underline"
               >
@@ -354,6 +398,7 @@ export default function AuthModal({ onClose }: Props) {
               <button
                 type="button"
                 disabled={loading}
+                onFocus={() => announceFocus('demo hesap ile giriş')}
                 onClick={async () => {
                   setError('');
                   setInfo(null);
@@ -376,6 +421,7 @@ export default function AuthModal({ onClose }: Props) {
           {(tab === 'forgot' || tab === 'reset') && (
             <button
               type="button"
+              onFocus={() => announceFocus('giriş ekranına dön')}
               onClick={() => { setTab('login'); setError(''); setInfo(null); }}
               className="block mx-auto text-xs font-black text-slate-500 dark:text-slate-400 hover:underline"
             >

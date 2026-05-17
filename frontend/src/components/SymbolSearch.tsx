@@ -8,14 +8,16 @@ type SearchItem = { symbol: string; name: string };
 const ALL_ITEMS: SearchItem[] = BIST_WATCHLIST.map((s) => ({ symbol: s.symbol, name: s.name }));
 
 /**
- * Türkçe karakterleri normalize et: "Garanti" ile "garanti", "Aselsan" ile "aselsan"
- * arasında fark olmasın; "İ" ve "ı" da match olsun.
+ * Türkçe karakterleri normalize et: "Garanti" ile "garanti", "Şişecam" ile "sisecam",
+ * "İş Bankası" ile "isbank" eşleşsin. Watchlist isimleri diakritikli olduğu için
+ * ASCII fold şart — aksi halde TR klavyesi olmayan kullanıcı arama yapamıyor.
  */
 function normalize(s: string): string {
   return s
     .toLocaleLowerCase('tr-TR')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
     .replace(/ı/g, 'i')
-    .replace(/[İi̇]/g, 'i')
     .replace(/ş/g, 's')
     .replace(/ğ/g, 'g')
     .replace(/ü/g, 'u')

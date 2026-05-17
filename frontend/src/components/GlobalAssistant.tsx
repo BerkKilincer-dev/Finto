@@ -27,6 +27,8 @@ type GlobalAssistantProps = {
   shortcuts?: ShortcutMap;
   /** Backend'e "kısa yanıt ver" sinyali gönderir (erişilebilir mod / concise tercihi). */
   concise?: boolean;
+  /** Aktif arayüz modu: erişilebilir kabukta route yerine bu bağlamı gönderir. */
+  uiMode?: 'standard' | 'accessible';
 };
 
 type VoiceConfig = {
@@ -58,12 +60,22 @@ function loadConfig(): VoiceConfig {
   }
 }
 
-const extractPageContext = () => {
-  const el = document.getElementById('page-content') ?? document.getElementById('main-content');
+const extractPageContext = (uiMode: 'standard' | 'accessible') => {
+  const el =
+    (uiMode === 'accessible'
+      ? document.getElementById('a11y-main')
+      : null) ??
+    document.getElementById('page-content') ??
+    document.getElementById('main-content');
   return el ? el.innerText.slice(0, 2000) : null;
 };
 
-export default function GlobalAssistant({ onVoiceCommand, shortcuts, concise = false }: GlobalAssistantProps = {}) {
+export default function GlobalAssistant({
+  onVoiceCommand,
+  shortcuts,
+  concise = false,
+  uiMode = 'standard',
+}: GlobalAssistantProps = {}) {
   const location = useLocation();
   const { announce } = useAnnouncer();
   const {
@@ -93,6 +105,7 @@ export default function GlobalAssistant({ onVoiceCommand, shortcuts, concise = f
   const voiceConfigRef = useRef(voiceConfig);
   const isOpenRef = useRef(isOpen);
   const locationPathRef = useRef(location.pathname);
+  const uiModeRef = useRef<'standard' | 'accessible'>(uiMode);
 
   useEffect(() => {
     voiceConfigRef.current = voiceConfig;
@@ -103,6 +116,9 @@ export default function GlobalAssistant({ onVoiceCommand, shortcuts, concise = f
   useEffect(() => {
     locationPathRef.current = location.pathname;
   }, [location.pathname]);
+  useEffect(() => {
+    uiModeRef.current = uiMode;
+  }, [uiMode]);
 
   const addMessage = useCallback((msg: Message) => {
     setMessages((prev) => [...prev, msg]);
@@ -167,12 +183,15 @@ export default function GlobalAssistant({ onVoiceCommand, shortcuts, concise = f
       fullTextRef.current = '';
 
       const doSend = (socket: WebSocket) => {
+        const currentMode = uiModeRef.current;
+        const pathForAssistant = currentMode === 'accessible' ? '/accessible' : locationPathRef.current;
         socket.send(
           JSON.stringify({
             query: trimmed,
-            path: locationPathRef.current,
-            context: extractPageContext(),
+            path: pathForAssistant,
+            context: extractPageContext(currentMode),
             concise,
+            uiMode: currentMode,
           }),
         );
 

@@ -12,7 +12,7 @@ import Compare from './pages/Compare';
 import Shortcuts from './pages/Shortcuts';
 import AuthModal from './components/AuthModal';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Moon, Sun, User, LogIn, Command } from 'lucide-react';
+import { Moon, Sun, User, LogIn } from 'lucide-react';
 import { useAuth } from './contexts/AuthContext.tsx';
 import { useStocksQuotes } from './hooks/useStocksQuotes';
 import { usePredictions } from './hooks/usePredictions';
@@ -205,6 +205,25 @@ function buildHoldingsSpeech(portfolio: PortfolioApi, stocks: MarketStock[], con
   );
 }
 
+function buildFeatureGuideSpeech(shortcutsText: {
+  assistant: string;
+  mic: string;
+  read: string;
+  mode: string;
+  explain: string;
+  close: string;
+}): string {
+  return (
+    'Finto özellik turu başladı. ' +
+    `Asistanı ${shortcutsText.assistant} ile açabilirsiniz. ` +
+    `Mikrofonu ${shortcutsText.mic} ile başlatıp "param ne kadar", "hisselerim ne", "portföyümü oku", "Aselsan 5 lot al" gibi komutlar verebilirsiniz. ` +
+    `Sayfayı okutmak için ${shortcutsText.read} kullanın. ` +
+    `Erişilebilir modu ${shortcutsText.mode} ile açıp sade, yüksek kontrast arayüze geçebilirsiniz. ` +
+    `Bu tanıtımı tekrar dinlemek için ${shortcutsText.explain} tuşunu kullanın. ` +
+    `Açık pencereyi kapatmak için ${shortcutsText.close}.`
+  );
+}
+
 function NotFoundPage() {
   return (
     <div role="alert" className="max-w-2xl mx-auto py-16 px-4 text-center space-y-4">
@@ -296,6 +315,18 @@ function AppShell() {
   }, [onboardingSeen, accessibleMode, announce, shortcuts]);
 
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [darkMode, setDarkMode] = useState<boolean>(() => {
+    return localStorage.getItem('finto_dark') === 'true';
+  });
+
+  useEffect(() => {
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+    localStorage.setItem('finto_dark', String(darkMode));
+  }, [darkMode]);
 
   const closeTopLayer = useCallback(() => {
     if (isCommandPaletteOpen) {
@@ -314,6 +345,19 @@ function AppShell() {
     const text = buildPageSpeech(location.pathname, portfolio, stocks, conciseMode);
     window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantSpeak, { detail: { text } }));
   }, [location.pathname, portfolio, stocks, conciseMode]);
+
+  const announceAllFeatures = useCallback(() => {
+    const text = buildFeatureGuideSpeech({
+      assistant: formatShortcut(shortcuts.toggleAssistant),
+      mic: formatShortcut(shortcuts.startListening),
+      read: formatShortcut(shortcuts.readPage),
+      mode: formatShortcut(shortcuts.toggleAccessibleMode),
+      explain: formatShortcut(shortcuts.announceFeatures),
+      close: formatShortcut(shortcuts.closeTopLayer),
+    });
+    announce('Özellik tanıtımı okunuyor.', 'polite');
+    window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantSpeak, { detail: { text } }));
+  }, [announce, shortcuts]);
 
   const toggleAccessibleMode = useCallback(() => {
     const next = !accessibleMode;
@@ -357,11 +401,15 @@ function AppShell() {
         window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantSpeak, { detail: { text } }));
         return;
       }
+      if (commandId === 'announce-features') {
+        announceAllFeatures();
+        return;
+      }
       if (commandId === 'toggle-accessible-mode') {
         toggleAccessibleMode();
       }
     },
-    [announce, closeTopLayer, handleReadPage, navigate, shortcuts, toggleAccessibleMode],
+    [announce, announceAllFeatures, closeTopLayer, handleReadPage, navigate, shortcuts, toggleAccessibleMode],
   );
 
   // Bekleyen satış onayı: kullanıcı "sat" deyince hemen yapmıyoruz; "evet" beklenir.
@@ -492,23 +540,11 @@ function AppShell() {
       onOpenCommandPalette: () => setIsCommandPaletteOpen(true),
       onReadPage: handleReadPage,
       onToggleAccessibleMode: toggleAccessibleMode,
+      onAnnounceFeatures: announceAllFeatures,
     },
     shortcuts,
     announce,
   );
-
-  const [darkMode, setDarkMode] = useState<boolean>(() => {
-    return localStorage.getItem('finto_dark') === 'true';
-  });
-
-  useEffect(() => {
-    if (darkMode) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-    localStorage.setItem('finto_dark', String(darkMode));
-  }, [darkMode]);
 
   const registeredStocks = useMemo(
     () => stocks.filter((stock) => portfolio.registeredSymbols.includes(stock.symbol)),
@@ -547,7 +583,7 @@ function AppShell() {
           onRunCommand={runCommand}
           onClose={() => setIsCommandPaletteOpen(false)}
         />
-        <GlobalAssistant onVoiceCommand={handleVoiceCommand} shortcuts={shortcuts} concise />
+        <GlobalAssistant onVoiceCommand={handleVoiceCommand} shortcuts={shortcuts} concise uiMode="accessible" />
       </>
     );
   }
@@ -576,29 +612,20 @@ function AppShell() {
               </nav>
               <SymbolSearch />
               <button
-                onClick={() => setLocale(locale === 'tr' ? 'en' : 'tr')}
-                className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-black text-slate-700 dark:text-slate-200 transition-colors"
-                aria-label={t('common.lang')}
-                title={t('common.lang')}
-              >
-                {locale.toUpperCase()}
-              </button>
-              <button
-                onClick={() => setIsCommandPaletteOpen(true)}
-                className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-200 transition-colors"
-                aria-label={`Komut paleti aç (${formatShortcut(shortcuts.openCommandPalette)})`}
-                aria-keyshortcuts={formatShortcut(shortcuts.openCommandPalette)}
-                title={`Komut paleti (${formatShortcut(shortcuts.openCommandPalette)})`}
-              >
-                <Command size={18} aria-hidden="true" />
-              </button>
-              <button
                 onClick={() => setDarkMode((d) => !d)}
                 className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-200 transition-colors"
                 aria-label={darkMode ? 'Aydınlık temaya geç' : 'Karanlık temaya geç'}
                 aria-pressed={darkMode}
               >
                 {darkMode ? <Sun size={18} aria-hidden="true" /> : <Moon size={18} aria-hidden="true" />}
+              </button>
+              <button
+                onClick={() => setLocale(locale === 'tr' ? 'en' : 'tr')}
+                className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-black text-slate-700 dark:text-slate-200 transition-colors"
+                aria-label={t('common.lang')}
+                title={t('common.lang')}
+              >
+                {locale.toUpperCase()}
               </button>
               {user ? (
                 <Link to="/profile" className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
@@ -778,7 +805,7 @@ function AppShell() {
           </Routes>
         </main>
 
-      <GlobalAssistant onVoiceCommand={handleVoiceCommand} shortcuts={shortcuts} concise={conciseMode} />
+      <GlobalAssistant onVoiceCommand={handleVoiceCommand} shortcuts={shortcuts} concise={conciseMode} uiMode="standard" />
     </div>
   );
 }

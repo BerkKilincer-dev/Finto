@@ -19,6 +19,28 @@ type CommandGroup = {
   items: Array<{ label: string; example: string }>;
 };
 
+type ShortcutRow = {
+  label: string;
+  combo: string;
+};
+
+const A11Y_THEME = {
+  page: 'min-h-screen bg-[#FFF7A8] text-[#0B1F4D] font-sans',
+  header: 'border-b-4 border-[#0B1F4D] bg-[#FFF266]',
+  footer: 'border-t-4 border-[#0B1F4D] bg-[#FFF266] mt-8',
+  card: 'border-2 border-[#0B1F4D] bg-[#FFFDE0] p-4',
+  primaryBtn:
+    'px-5 py-3 bg-[#0B2E78] text-[#FFF7A8] font-black border-2 border-[#0B1F4D] hover:bg-[#0A255F] focus-visible:ring-4 focus-visible:ring-[#0B2E78] transition-colors',
+  secondaryBtn:
+    'px-5 py-3 border-2 border-[#0B1F4D] font-black bg-[#DDEBFF] hover:bg-[#C7DDFF] focus-visible:ring-4 focus-visible:ring-[#0B2E78] transition-colors',
+  neutralBtn:
+    'px-5 py-3 bg-[#FFFDE0] text-[#0B1F4D] font-black border-2 border-[#0B1F4D] hover:bg-white focus-visible:ring-4 focus-visible:ring-[#0B2E78] transition-colors',
+  micBtn:
+    'w-full py-12 text-3xl font-black bg-[#0B2E78] hover:bg-[#0A255F] focus-visible:bg-[#0A255F] text-[#FFF7A8] border-4 border-[#0B1F4D] focus-visible:ring-4 focus-visible:ring-[#0B2E78]',
+  accentBtn:
+    'px-4 py-3 border-2 border-[#0B1F4D] bg-[#DDEBFF] hover:bg-[#C7DDFF] focus-visible:ring-4 focus-visible:ring-[#0B2E78] font-black transition-colors',
+} as const;
+
 const VOICE_COMMAND_GROUPS: CommandGroup[] = [
   {
     title: 'Bilgi',
@@ -55,6 +77,15 @@ export default function AccessibleShell({ portfolio, stocks, marketDataWarning, 
   const [lastAssistant, setLastAssistant] = useState<string>('');
   const [welcomedRef] = useState(() => ({ done: false }));
   const mainRef = useRef<HTMLElement>(null);
+  const shortcutRows: ShortcutRow[] = [
+    { label: 'Asistan', combo: formatShortcut(shortcuts.toggleAssistant) },
+    { label: 'Mikrofon', combo: formatShortcut(shortcuts.startListening) },
+    { label: 'Sayfayı oku', combo: formatShortcut(shortcuts.readPage) },
+    { label: 'Komut paleti', combo: formatShortcut(shortcuts.openCommandPalette) },
+    { label: 'Erişilebilir mod', combo: formatShortcut(shortcuts.toggleAccessibleMode) },
+    { label: 'Özellikleri anlat', combo: formatShortcut(shortcuts.announceFeatures) },
+    { label: 'Kapat', combo: formatShortcut(shortcuts.closeTopLayer) },
+  ];
 
   // Asistanın söylediği son metni gör (görenler için, görmeyenler zaten duyar).
   useEffect(() => {
@@ -124,13 +155,19 @@ export default function AccessibleShell({ portfolio, stocks, marketDataWarning, 
     window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantQuery, { detail: { text } }));
   }
 
+  function readShortcuts() {
+    const text = getGlobalHint(shortcuts);
+    window.dispatchEvent(new CustomEvent(APP_EVENTS.assistantSpeak, { detail: { text } }));
+    announce('Kısayollar sesli okunuyor.', 'polite');
+  }
+
   return (
-    <div className="min-h-screen bg-white dark:bg-black text-slate-900 dark:text-white font-sans">
+    <div className={A11Y_THEME.page}>
       <a href="#a11y-main" className="skip-to-content">
         Ana içeriğe atla
       </a>
 
-      <header role="banner" className="border-b-4 border-slate-900 dark:border-white">
+      <header role="banner" className={A11Y_THEME.header}>
         <div className="max-w-3xl mx-auto px-4 py-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-3xl font-black tracking-tight">FINTO — Sesli Mod</h1>
@@ -142,14 +179,14 @@ export default function AccessibleShell({ portfolio, stocks, marketDataWarning, 
             {user ? (
               <button
                 onClick={handleSignOut}
-                className="px-5 py-3 border-2 border-slate-900 dark:border-white font-black bg-white dark:bg-black"
+                className={A11Y_THEME.secondaryBtn}
               >
                 Çıkış
               </button>
             ) : (
               <button
                 onClick={onOpenAuth}
-                className="px-5 py-3 bg-slate-900 dark:bg-white text-white dark:text-black font-black border-2 border-slate-900 dark:border-white"
+                className={A11Y_THEME.primaryBtn}
               >
                 Giriş yap
               </button>
@@ -157,7 +194,7 @@ export default function AccessibleShell({ portfolio, stocks, marketDataWarning, 
             <button
               onClick={exitMode}
               aria-keyshortcuts={formatShortcut(shortcuts.toggleAccessibleMode)}
-              className="px-5 py-3 bg-yellow-300 text-slate-900 font-black border-2 border-slate-900"
+              className={A11Y_THEME.neutralBtn}
             >
               Normal görünüm ({formatShortcut(shortcuts.toggleAccessibleMode)})
             </button>
@@ -173,7 +210,7 @@ export default function AccessibleShell({ portfolio, stocks, marketDataWarning, 
           <button
             onClick={startListening}
             aria-keyshortcuts={`${formatShortcut(shortcuts.startListening)} Space`}
-            className="w-full py-12 text-3xl font-black bg-blue-700 hover:bg-blue-800 focus-visible:bg-blue-800 text-white border-4 border-slate-900 dark:border-white"
+            className={A11Y_THEME.micBtn}
           >
             🎤 KONUŞMAK İÇİN BAS
           </button>
@@ -187,7 +224,7 @@ export default function AccessibleShell({ portfolio, stocks, marketDataWarning, 
           <h2 id="status-title" className="text-2xl font-black">
             Durum
           </h2>
-          <div className="border-2 border-slate-900 dark:border-white p-4 space-y-2">
+          <div className={`${A11Y_THEME.card} space-y-2`}>
             <p className="text-lg">
               <span className="font-black">Nakit:</span>{' '}
               {portfolio.cashBalance.toLocaleString('tr-TR', {
@@ -212,7 +249,7 @@ export default function AccessibleShell({ portfolio, stocks, marketDataWarning, 
             </p>
           </div>
           {portfolio.holdings.length > 0 && (
-            <div className="border-2 border-slate-900 dark:border-white p-4">
+            <div className={A11Y_THEME.card}>
               <p className="text-lg font-black mb-2">Pozisyon Detayı</p>
               <ul className="space-y-1 text-base">
                 {portfolio.holdings.map((h) => (
@@ -231,36 +268,55 @@ export default function AccessibleShell({ portfolio, stocks, marketDataWarning, 
           <div className="grid gap-2 md:grid-cols-2">
             <button
               onClick={() => quickAsk('param ne kadar')}
-              className="px-4 py-3 border-2 border-slate-900 dark:border-white bg-white dark:bg-black font-black text-left"
+              className={`${A11Y_THEME.accentBtn} text-left`}
             >
               Nakitimi söyle
             </button>
             <button
               onClick={() => quickAsk('portföyümü oku')}
-              className="px-4 py-3 border-2 border-slate-900 dark:border-white bg-white dark:bg-black font-black text-left"
+              className={`${A11Y_THEME.neutralBtn} text-left`}
             >
               Portföy özetini söyle
             </button>
             <button
               onClick={() => quickAsk('hisselerim ne')}
-              className="px-4 py-3 border-2 border-slate-900 dark:border-white bg-white dark:bg-black font-black text-left"
+              className={`${A11Y_THEME.accentBtn} text-left`}
             >
               Hisselerimi söyle
             </button>
             <button
               onClick={() => quickAsk('tahminleri oku')}
-              className="px-4 py-3 border-2 border-slate-900 dark:border-white bg-white dark:bg-black font-black text-left"
+              className={`${A11Y_THEME.neutralBtn} text-left`}
             >
               Tahminleri oku
             </button>
           </div>
         </section>
 
+        <section aria-labelledby="shortcuts-title" className="space-y-3">
+          <h2 id="shortcuts-title" className="text-2xl font-black">
+            Klavye kısayolları
+          </h2>
+          <div className={`${A11Y_THEME.card} space-y-2`}>
+            {shortcutRows.map((row) => (
+              <p key={row.label} className="text-lg">
+                <span className="font-black">{row.combo}</span>: {row.label}
+              </p>
+            ))}
+          </div>
+          <button
+            onClick={readShortcuts}
+            className={A11Y_THEME.accentBtn}
+          >
+            Kısayolları sesli oku
+          </button>
+        </section>
+
         <section aria-labelledby="last-title" aria-live="polite" className="space-y-3">
           <h2 id="last-title" className="text-2xl font-black">
             Son söylenen
           </h2>
-          <div className="border-2 border-slate-900 dark:border-white p-4 min-h-[5rem] text-lg">
+          <div className={`${A11Y_THEME.card} min-h-[5rem] text-lg`}>
             {lastAssistant || 'Henüz bir şey söylenmedi. Konuşmaya başlayabilirsiniz.'}
           </div>
         </section>
@@ -278,7 +334,7 @@ export default function AccessibleShell({ portfolio, stocks, marketDataWarning, 
                 </h3>
                 <ul className="space-y-2">
                   {group.items.map((c) => (
-                    <li key={c.label} className="border-2 border-slate-900 dark:border-white p-3">
+                    <li key={c.label} className={A11Y_THEME.card}>
                       <p className="text-lg font-black">{c.label}</p>
                       <p className="text-base">Söyle: {c.example}</p>
                     </li>
@@ -290,7 +346,7 @@ export default function AccessibleShell({ portfolio, stocks, marketDataWarning, 
         </section>
       </main>
 
-      <footer role="contentinfo" className="border-t-4 border-slate-900 dark:border-white mt-8">
+      <footer role="contentinfo" className={A11Y_THEME.footer}>
         <div className="max-w-3xl mx-auto px-4 py-4 text-base font-bold">
           <p>{getGlobalHint(shortcuts)}</p>
         </div>

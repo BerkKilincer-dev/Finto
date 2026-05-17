@@ -59,8 +59,7 @@ Finto/
 │   └── tsconfig.json         → TypeScript ayarları
 │
 ├── ai/                       → Python sesli asistan backend
-│   ├── voice_assistant.py    → WebSocket sunucusu, Gemini AI streaming
-│   └── requirements.txt      → Python bağımlılıkları
+│   └── voice_assistant.py    → WebSocket sunucusu, Gemini AI streaming
 │
 ├── .env                      → Ortam değişkenleri (git'e eklenmez!)
 ├── .env.example              → .env şablonu
